@@ -161,6 +161,44 @@ void kgdb_arch_set_pc(struct pt_regs *regs, unsigned long pc)
 }
 
 static int compiled_break;
+static DEFINE_PER_CPU(bool, kgdb_step_ref_owned);
+
+static bool kgdb_step_ref_is_owned(void)
+{
+	return this_cpu_read(kgdb_step_ref_owned);
+}
+NOKPROBE_SYMBOL(kgdb_step_ref_is_owned);
+
+static void kgdb_step_ref_get(struct pt_regs *regs)
+{
+	if (WARN_ON_ONCE(kgdb_step_ref_is_owned()))
+		return;
+
+	kernel_enable_single_step(regs);
+	this_cpu_write(kgdb_step_ref_owned, true);
+}
+NOKPROBE_SYMBOL(kgdb_step_ref_get);
+
+static bool kgdb_step_ref_take(void)
+{
+	if (!kgdb_step_ref_is_owned())
+		return false;
+
+	this_cpu_write(kgdb_step_ref_owned, false);
+	return true;
+}
+NOKPROBE_SYMBOL(kgdb_step_ref_take);
+
+static bool kgdb_step_ref_put(void)
+{
+	if (!kgdb_step_ref_take())
+		return false;
+
+	/* Balance our debug-monitor ref even if another owner cleared SS. */
+	kernel_disable_single_step();
+	return true;
+}
+NOKPROBE_SYMBOL(kgdb_step_ref_put);
 
 enum kgdb_hw_resume_mode {
 	KGDB_HW_RESUME_NONE,
@@ -207,7 +245,6 @@ struct kgdb_hw_cpu_state {
 	u64 hit_generation;
 	bool hit_from_kgdb_step;
 	bool step_owned;
-	bool step_uses_kgdb_ss;
 };
 
 static struct kgdb_hw_breakpoint kgdb_hw_breakpoints[KGDB_HW_MAX_SLOTS];
@@ -644,8 +681,7 @@ static void kgdb_hw_overflow_handler(struct perf_event *event,
 	/* The record must remain valid even if another CPU reuses the slot. */
 	state->hit_pc = instruction_pointer(regs);
 	state->hit_generation = armed_generation;
-	state->hit_from_kgdb_step = kgdb_single_step &&
-		atomic_read(&kgdb_cpu_doing_single_step) == cpu;
+	state->hit_from_kgdb_step = kgdb_step_ref_is_owned();
 	smp_wmb();
 	state->phase = KGDB_HW_CPU_HIT;
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
@@ -660,14 +696,6 @@ static bool kgdb_prepare_hw_step(struct pt_regs *regs,
 	bool active;
 
 	if (state->phase == KGDB_HW_CPU_STEP) {
-		if (resume_mode == KGDB_HW_RESUME_CONTINUE &&
-		    state->step_uses_kgdb_ss) {
-			if (kernel_active_single_step())
-				kernel_disable_single_step();
-			kernel_enable_single_step(regs);
-			state->step_owned = true;
-			state->step_uses_kgdb_ss = false;
-		}
 		state->resume_mode = resume_mode;
 		return true;
 	}
@@ -681,19 +709,18 @@ static bool kgdb_prepare_hw_step(struct pt_regs *regs,
 	}
 
 	active = kernel_active_single_step();
-	state->step_uses_kgdb_ss = active && state->hit_from_kgdb_step;
-	if (resume_mode == KGDB_HW_RESUME_CONTINUE &&
-	    state->step_uses_kgdb_ss) {
-		kernel_disable_single_step();
-		active = false;
-		state->step_uses_kgdb_ss = false;
+	state->step_owned = state->hit_from_kgdb_step &&
+		kgdb_step_ref_take();
+	if (!active) {
+		/* Replace a transferred-but-cleared SS without leaking its ref. */
+		if (state->step_owned)
+			kernel_disable_single_step();
+		kernel_enable_single_step(regs);
+		state->step_owned = true;
 	}
-	state->step_owned = !active;
 	state->resume_mode = resume_mode;
 	state->hit_from_kgdb_step = false;
 	state->phase = KGDB_HW_CPU_STEP;
-	if (!active)
-		kernel_enable_single_step(regs);
 	return true;
 }
 
@@ -709,11 +736,10 @@ static enum kgdb_hw_step_action kgdb_finish_hw_step(void)
 	owned = state->step_owned;
 	resume_mode = state->resume_mode;
 	state->step_owned = false;
-	state->step_uses_kgdb_ss = false;
 	state->resume_mode = KGDB_HW_RESUME_NONE;
 	state->hit_generation = 0;
 	state->phase = KGDB_HW_CPU_IDLE;
-	if (owned && kernel_active_single_step())
+	if (owned)
 		kernel_disable_single_step();
 	kgdb_correct_hw_breakpoints();
 
@@ -941,9 +967,8 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		 * Received continue command, disable single step
 		 */
 		if (!kgdb_prepare_hw_step(linux_regs,
-					  KGDB_HW_RESUME_CONTINUE) &&
-		    kernel_active_single_step())
-			kernel_disable_single_step();
+					  KGDB_HW_RESUME_CONTINUE))
+			kgdb_step_ref_put();
 
 		err = 0;
 		break;
@@ -963,9 +988,11 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		/*
 		 * Enable single step handling
 		 */
-		if (!kgdb_prepare_hw_step(linux_regs, KGDB_HW_RESUME_STEP) &&
-		    !kernel_active_single_step())
-			kernel_enable_single_step(linux_regs);
+		if (!kgdb_prepare_hw_step(linux_regs, KGDB_HW_RESUME_STEP)) {
+			kgdb_step_ref_put();
+			if (!kernel_active_single_step())
+				kgdb_step_ref_get(linux_regs);
+		}
 		err = 0;
 		break;
 	default:
@@ -1019,6 +1046,7 @@ static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
 	if (!kgdb_single_step)
 		return DBG_HOOK_ERROR;
 
+	kgdb_step_ref_put();
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
 	return DBG_HOOK_HANDLED;
 }
