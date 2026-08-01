@@ -20,13 +20,17 @@
  */
 
 #include <linux/bug.h>
+#include <linux/cpu.h>
+#include <linux/hw_breakpoint.h>
 #include <linux/irq.h>
 #include <linux/kdebug.h>
 #include <linux/kgdb.h>
 #include <linux/kprobes.h>
+#include <linux/percpu.h>
 #include <linux/sched/task_stack.h>
 
 #include <asm/debug-monitors.h>
+#include <asm/hw_breakpoint.h>
 #include <asm/insn.h>
 #include <asm/traps.h>
 
@@ -155,6 +159,446 @@ void kgdb_arch_set_pc(struct pt_regs *regs, unsigned long pc)
 
 static int compiled_break;
 
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+#define KGDB_HW_MAX_SLOTS	(ARM_MAX_BRP + ARM_MAX_WRP)
+
+struct kgdb_hw_breakpoint {
+	bool enabled;
+	unsigned long addr;
+	int len;
+	enum kgdb_bptype bptype;
+	int perf_type;
+	struct perf_event * __percpu *events;
+};
+
+static struct kgdb_hw_breakpoint kgdb_hw_breakpoints[KGDB_HW_MAX_SLOTS];
+static unsigned int kgdb_hw_slot_count;
+static DEFINE_PER_CPU(struct kgdb_hw_breakpoint *, kgdb_hw_hit);
+static DEFINE_PER_CPU(unsigned long, kgdb_hw_hit_pc);
+static DEFINE_PER_CPU(bool, kgdb_hw_step_pending);
+static DEFINE_PER_CPU(bool, kgdb_hw_step_owned);
+
+static int kgdb_hw_perf_type(enum kgdb_bptype bptype)
+{
+	switch (bptype) {
+	case BP_HARDWARE_BREAKPOINT:
+		return HW_BREAKPOINT_X;
+	case BP_WRITE_WATCHPOINT:
+		return HW_BREAKPOINT_W;
+	case BP_READ_WATCHPOINT:
+		return HW_BREAKPOINT_R;
+	case BP_ACCESS_WATCHPOINT:
+		return HW_BREAKPOINT_RW;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int kgdb_hw_normalize_len(unsigned long addr, int len,
+				 enum kgdb_bptype bptype)
+{
+	if (bptype == BP_HARDWARE_BREAKPOINT)
+		return (addr & 0x3) ? -EINVAL : AARCH64_INSN_SIZE;
+
+	if (len < HW_BREAKPOINT_LEN_1 || len > HW_BREAKPOINT_LEN_8)
+		return -EINVAL;
+
+	/* An AArch64 watchpoint cannot span two aligned 8-byte blocks. */
+	if ((addr & 0x7) + len > HW_BREAKPOINT_LEN_8)
+		return -EINVAL;
+
+	return len;
+}
+
+static int kgdb_hw_prepare_event(struct perf_event *event,
+				 unsigned long addr, int len,
+				 int perf_type, bool enabled)
+{
+	event->attr.bp_addr = addr;
+	event->attr.bp_len = len;
+	event->attr.bp_type = perf_type;
+	event->attr.disabled = !enabled;
+
+	return arch_validate_hwbkpt_settings(event);
+}
+
+static int kgdb_hw_reserve_slot(struct kgdb_hw_breakpoint *slot,
+				unsigned long addr, int len, int perf_type)
+{
+	cpumask_t reserved;
+	int cpu;
+	int ret = 0;
+
+	cpumask_clear(&reserved);
+	for_each_online_cpu(cpu) {
+		struct perf_event **pevent;
+		struct perf_event *event;
+
+		pevent = per_cpu_ptr(slot->events, cpu);
+		event = *pevent;
+		if (!event) {
+			ret = -ENODEV;
+			goto fail;
+		}
+
+		ret = kgdb_hw_prepare_event(event, addr, len, perf_type, false);
+		if (ret)
+			goto fail;
+
+		ret = dbg_reserve_bp_slot(event);
+		if (ret) {
+			ret = -ENOSPC;
+			goto fail;
+		}
+		cpumask_set_cpu(cpu, &reserved);
+	}
+
+	return 0;
+
+fail:
+	for_each_cpu(cpu, &reserved) {
+		struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
+
+		dbg_release_bp_slot(*pevent);
+	}
+	return ret;
+}
+
+static void kgdb_hw_clear_hit(struct kgdb_hw_breakpoint *slot)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		if (per_cpu(kgdb_hw_hit, cpu) != slot)
+			continue;
+		per_cpu(kgdb_hw_hit, cpu) = NULL;
+		per_cpu(kgdb_hw_step_pending, cpu) = false;
+		per_cpu(kgdb_hw_step_owned, cpu) = false;
+	}
+}
+
+static void kgdb_hw_release_slot(struct kgdb_hw_breakpoint *slot)
+{
+	int cpu;
+	int this_cpu = raw_smp_processor_id();
+
+	for_each_online_cpu(cpu) {
+		struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
+		struct perf_event *event = *pevent;
+
+		if (!event)
+			continue;
+		if (!event->attr.disabled) {
+			/* All CPUs normally uninstall these as they enter KGDB. */
+			if (cpu == this_cpu)
+				arch_uninstall_hw_breakpoint(event);
+			event->attr.disabled = 1;
+			event->hw.state = PERF_HES_STOPPED;
+		}
+		if (dbg_release_bp_slot(event))
+			pr_err("KGDB: failed to release hw breakpoint at %lx on cpu%d\n",
+			       slot->addr, cpu);
+	}
+
+	kgdb_hw_clear_hit(slot);
+	slot->enabled = false;
+	slot->addr = 0;
+	slot->len = 0;
+	slot->bptype = BP_BREAKPOINT;
+	slot->perf_type = HW_BREAKPOINT_EMPTY;
+}
+
+static int kgdb_set_hw_breakpoint(unsigned long addr, int len,
+				  enum kgdb_bptype bptype)
+{
+	struct kgdb_hw_breakpoint *slot = NULL;
+	int perf_type;
+	int normalized_len;
+	unsigned int i;
+	int ret;
+
+	if (!kgdb_hw_slot_count)
+		return -ENODEV;
+	if (addr < TASK_SIZE)
+		return -EINVAL;
+
+	perf_type = kgdb_hw_perf_type(bptype);
+	if (perf_type < 0)
+		return perf_type;
+
+	normalized_len = kgdb_hw_normalize_len(addr, len, bptype);
+	if (normalized_len < 0)
+		return normalized_len;
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *candidate = &kgdb_hw_breakpoints[i];
+
+		if (candidate->enabled && candidate->addr == addr &&
+		    candidate->len == normalized_len &&
+		    candidate->bptype == bptype)
+			return 0;
+		if (!candidate->enabled && !slot)
+			slot = candidate;
+	}
+	if (!slot || !slot->events)
+		return -ENOSPC;
+
+	ret = kgdb_hw_reserve_slot(slot, addr, normalized_len, perf_type);
+	if (ret)
+		return ret;
+
+	slot->addr = addr;
+	slot->len = normalized_len;
+	slot->bptype = bptype;
+	slot->perf_type = perf_type;
+	slot->enabled = true;
+	return 0;
+}
+
+static int kgdb_remove_hw_breakpoint(unsigned long addr, int len,
+				     enum kgdb_bptype bptype)
+{
+	int normalized_len;
+	unsigned int i;
+
+	normalized_len = kgdb_hw_normalize_len(addr, len, bptype);
+	if (normalized_len < 0)
+		return normalized_len;
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+
+		if (!slot->enabled || slot->addr != addr ||
+		    slot->len != normalized_len || slot->bptype != bptype)
+			continue;
+		kgdb_hw_release_slot(slot);
+		return 0;
+	}
+
+	return -ENOENT;
+}
+
+static void kgdb_remove_all_hw_breakpoints(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		if (kgdb_hw_breakpoints[i].enabled)
+			kgdb_hw_release_slot(&kgdb_hw_breakpoints[i]);
+	}
+}
+
+static void kgdb_disable_hw_breakpoints(struct pt_regs *regs)
+{
+	unsigned int i;
+	int cpu = raw_smp_processor_id();
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+		struct perf_event **pevent;
+		struct perf_event *event;
+
+		if (!slot->enabled || !slot->events)
+			continue;
+		pevent = per_cpu_ptr(slot->events, cpu);
+		event = *pevent;
+		if (!event || event->attr.disabled)
+			continue;
+		arch_uninstall_hw_breakpoint(event);
+		event->attr.disabled = 1;
+		event->hw.state = PERF_HES_STOPPED;
+	}
+}
+
+static void kgdb_correct_hw_breakpoints(void)
+{
+	unsigned int i;
+	int cpu = raw_smp_processor_id();
+
+	if (this_cpu_read(kgdb_hw_step_pending))
+		return;
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+		struct perf_event **pevent;
+		struct perf_event *event;
+		int ret;
+
+		if (!slot->enabled || !slot->events)
+			continue;
+		pevent = per_cpu_ptr(slot->events, cpu);
+		event = *pevent;
+		if (!event || !event->attr.disabled)
+			continue;
+
+		ret = kgdb_hw_prepare_event(event, slot->addr, slot->len,
+					    slot->perf_type, true);
+		if (!ret)
+			ret = arch_install_hw_breakpoint(event);
+		if (ret) {
+			kgdb_hw_prepare_event(event, slot->addr, slot->len,
+					      slot->perf_type, false);
+			pr_err("KGDB: failed to install hw breakpoint at %lx on cpu%d: %d\n",
+			       slot->addr, cpu, ret);
+			event->hw.state = PERF_HES_STOPPED;
+		} else {
+			event->hw.state = 0;
+		}
+	}
+}
+
+static void kgdb_hw_overflow_handler(struct perf_event *event,
+				     struct perf_sample_data *data,
+				     struct pt_regs *regs)
+{
+	struct kgdb_hw_breakpoint *slot = event->overflow_handler_context;
+
+	if (!slot || !slot->enabled || user_mode(regs) ||
+	    this_cpu_read(kgdb_hw_hit))
+		return;
+
+	this_cpu_write(kgdb_hw_hit, slot);
+	this_cpu_write(kgdb_hw_hit_pc, instruction_pointer(regs));
+	kgdb_handle_exception(1, SIGTRAP, 0, regs);
+}
+
+NOKPROBE_SYMBOL(kgdb_hw_overflow_handler);
+
+static bool kgdb_prepare_hw_step(struct pt_regs *regs)
+{
+	struct kgdb_hw_breakpoint *slot = this_cpu_read(kgdb_hw_hit);
+	bool active;
+
+	if (!slot)
+		return false;
+	if (!slot->enabled ||
+	    instruction_pointer(regs) != this_cpu_read(kgdb_hw_hit_pc)) {
+		this_cpu_write(kgdb_hw_hit, NULL);
+		return false;
+	}
+
+	active = kernel_active_single_step();
+	this_cpu_write(kgdb_hw_step_owned, !active);
+	this_cpu_write(kgdb_hw_step_pending, true);
+	if (!active)
+		kernel_enable_single_step(regs);
+	return true;
+}
+
+static bool kgdb_finish_hw_step(void)
+{
+	bool owned;
+
+	if (!this_cpu_read(kgdb_hw_step_pending))
+		return false;
+
+	owned = this_cpu_read(kgdb_hw_step_owned);
+	this_cpu_write(kgdb_hw_step_pending, false);
+	this_cpu_write(kgdb_hw_step_owned, false);
+	this_cpu_write(kgdb_hw_hit, NULL);
+	if (owned && kernel_active_single_step())
+		kernel_disable_single_step();
+	kgdb_correct_hw_breakpoints();
+
+	/* Consume only the private step used to get past the hit address. */
+	return owned && !kgdb_single_step;
+}
+
+static void kgdb_hw_late_init(void)
+{
+	struct perf_event_attr attr;
+	unsigned int i;
+	unsigned int nr_brps = get_num_brps();
+	unsigned int nr_wrps = get_num_wrps();
+
+	if (kgdb_hw_slot_count)
+		return;
+
+	kgdb_hw_slot_count = min_t(unsigned int, nr_brps + nr_wrps,
+				   ARRAY_SIZE(kgdb_hw_breakpoints));
+	hw_breakpoint_init(&attr);
+	attr.bp_addr = (unsigned long)kgdb_arch_init;
+	attr.bp_len = HW_BREAKPOINT_LEN_1;
+	attr.bp_type = HW_BREAKPOINT_W;
+	attr.disabled = 1;
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+		int cpu;
+
+		if (slot->events)
+			continue;
+		slot->events = register_wide_hw_breakpoint(&attr,
+							   kgdb_hw_overflow_handler, slot);
+		if (IS_ERR((void * __force)slot->events)) {
+			pr_err("KGDB: cannot preallocate ARM64 hw breakpoint slot %u: %ld\n",
+			       i, PTR_ERR((void * __force)slot->events));
+			slot->events = NULL;
+			goto fail;
+		}
+
+		for_each_online_cpu(cpu) {
+			struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
+			struct perf_event *event = *pevent;
+
+			event->hw.sample_period = 1;
+			event->hw.state = PERF_HES_STOPPED;
+			if (event->destroy) {
+				event->destroy = NULL;
+				release_bp_slot(event);
+			}
+		}
+	}
+
+	pr_info("KGDB: ARM64 hardware breakpoints ready (%u BRP, %u WRP)\n",
+		nr_brps, nr_wrps);
+	return;
+
+fail:
+	while (i--) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+
+		unregister_wide_hw_breakpoint(slot->events);
+		slot->events = NULL;
+	}
+	kgdb_hw_slot_count = 0;
+}
+
+static void kgdb_hw_cleanup(void)
+{
+	unsigned int i;
+
+	kgdb_remove_all_hw_breakpoints();
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+
+		if (!slot->events)
+			continue;
+		unregister_wide_hw_breakpoint(slot->events);
+		slot->events = NULL;
+	}
+	kgdb_hw_slot_count = 0;
+}
+#else
+static inline bool kgdb_prepare_hw_step(struct pt_regs *regs)
+{
+	return false;
+}
+
+static inline bool kgdb_finish_hw_step(void)
+{
+	return false;
+}
+
+static inline void kgdb_hw_late_init(void)
+{
+}
+
+static inline void kgdb_hw_cleanup(void)
+{
+}
+#endif
+
 static void kgdb_arch_update_addr(struct pt_regs *regs,
 				char *remcom_in_buffer)
 {
@@ -200,7 +644,8 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		/*
 		 * Received continue command, disable single step
 		 */
-		if (kernel_active_single_step())
+		if (!kgdb_prepare_hw_step(linux_regs) &&
+		    kernel_active_single_step())
 			kernel_disable_single_step();
 
 		err = 0;
@@ -221,7 +666,8 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		/*
 		 * Enable single step handling
 		 */
-		if (!kernel_active_single_step())
+		if (!kgdb_prepare_hw_step(linux_regs) &&
+		    !kernel_active_single_step())
 			kernel_enable_single_step(linux_regs);
 		err = 0;
 		break;
@@ -255,7 +701,13 @@ NOKPROBE_SYMBOL(kgdb_compiled_brk_fn);
 
 static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
 {
-	if (user_mode(regs) || !kgdb_single_step)
+	if (user_mode(regs))
+		return DBG_HOOK_ERROR;
+
+	if (kgdb_finish_hw_step())
+		return DBG_HOOK_HANDLED;
+
+	if (!kgdb_single_step)
 		return DBG_HOOK_ERROR;
 
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
@@ -346,13 +798,23 @@ int kgdb_arch_init(void)
  */
 void kgdb_arch_exit(void)
 {
+	kgdb_hw_cleanup();
 	unregister_break_hook(&kgdb_brkpt_hook);
 	unregister_break_hook(&kgdb_compiled_brkpt_hook);
 	unregister_step_hook(&kgdb_step_hook);
 	unregister_die_notifier(&kgdb_notifier);
 }
 
-struct kgdb_arch arch_kgdb_ops;
+struct kgdb_arch arch_kgdb_ops = {
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+	.flags			= KGDB_HW_BREAKPOINT,
+	.set_hw_breakpoint	= kgdb_set_hw_breakpoint,
+	.remove_hw_breakpoint	= kgdb_remove_hw_breakpoint,
+	.disable_hw_break	= kgdb_disable_hw_breakpoints,
+	.remove_all_hw_break	= kgdb_remove_all_hw_breakpoints,
+	.correct_hw_break	= kgdb_correct_hw_breakpoints,
+#endif
+};
 
 int kgdb_arch_set_breakpoint(struct kgdb_bkpt *bpt)
 {
@@ -372,4 +834,9 @@ int kgdb_arch_remove_breakpoint(struct kgdb_bkpt *bpt)
 {
 	return aarch64_insn_write((void *)bpt->bpt_addr,
 			*(u32 *)bpt->saved_instr);
+}
+
+void kgdb_arch_late(void)
+{
+	kgdb_hw_late_init();
 }
