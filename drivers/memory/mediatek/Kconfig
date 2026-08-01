@@ -17,10 +17,19 @@ config MEDIATEK_DRAMC
 	  for reporting DRAM information, e.g. DRAM mode register (MR) for
 	  DRAM vendor ID, temperature, and density.
 
+config MEDIATEK_BOOT_HW_DIAG
+	bool "MediaTek boot cache and DRAM diagnostic"
+	depends on MEDIATEK_DRAMC && ARM64 && SMP
+	help
+	  Run an opt-in cache, DRAM, and power-integrity diagnostic during
+	  boot. The diagnostic is disabled unless the mtk_hwdiag=cache or
+	  mtk_hwdiag=full kernel command-line parameter is supplied. It logs
+	  raw ARM RAS records around every test phase so cache ECC events can
+	  be correlated with the CPU and workload that exposed them.
+
 config MEDIATEK_EMI
 	tristate "MediaTek EMI driver"
 	help
 	  This selects the MediaTek(R) EMI driver.
 	  Provide the API for MPU register and handle EMI MPU violation,
 	  the API for EMI information, and the sysfs for EMI ISU control.
-
