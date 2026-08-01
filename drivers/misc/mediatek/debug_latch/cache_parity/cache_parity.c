@@ -196,19 +196,27 @@ static irqreturn_t default_parity_isr_v2(int irq, void *dev_id)
 	};
 #endif
 
-	u32 hwirq = virq_to_hwirq(irq);
+	int irq_snapshot = irq;
+	u32 hwirq = virq_to_hwirq(irq_snapshot);
+	u64 misc0_el1;
+	u64 status_el1;
+
+	write_ERXSELR_EL1(((hwirq - FAULTIRQ_START) == 0) ? 1 : 0);
+	misc0_el1 = read_ERXMISC0_EL1();
+	status_el1 = read_ERXSTATUS_EL1();
+	ECC_LOG("ecc pre-dump snapshot, irq:%d, hwirq:%u, "
+		"misc0_el1:0x%016llx, status_el1:0x%016llx\n",
+		irq_snapshot, hwirq, misc0_el1, status_el1);
 
 	ecc_dump_debug_info();
 
 	cache_error_happened = true;
 	cache_error_times++;
 
-	write_ERXSELR_EL1(((hwirq - FAULTIRQ_START) == 0) ? 1 : 0);
-
 	/* collect error status to report later */
 	cache_parity_wd.data.v2.irq_index = hwirq;
-	cache_parity_wd.data.v2.misc0_el1 = read_ERXMISC0_EL1();
-	cache_parity_wd.data.v2.status_el1 = read_ERXSTATUS_EL1();
+	cache_parity_wd.data.v2.misc0_el1 = misc0_el1;
+	cache_parity_wd.data.v2.status_el1 = status_el1;
 
 	/* clear error status to make irq not pending */
 	write_ERXSTATUS_EL1(cache_parity_wd.data.v2.status_el1);
