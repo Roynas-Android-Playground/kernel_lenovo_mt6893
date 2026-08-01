@@ -2377,6 +2377,13 @@
 			memory contents and reserves bad memory
 			regions that are detected.
 
+	mtk_hwdiag=	[ARM64,MTK] Run the MediaTek boot hardware diagnostic.
+			cache: exercise a cache-sized buffer on each CPU.
+			full: additionally exercise flushed DRAM-sized buffers
+			and run a parallel per-CPU cache/power stress pass.
+			The diagnostic logs raw ARM RAS records before and after
+			each phase. It is disabled when this option is omitted.
+
 	mem_encrypt=	[X86-64] AMD Secure Memory Encryption (SME) control
 			Valid arguments: on, off
 			Default (depends on kernel configuration option):
