@@ -205,7 +205,9 @@ struct kgdb_hw_cpu_state {
 	enum kgdb_hw_resume_mode resume_mode;
 	unsigned long hit_pc;
 	u64 hit_generation;
+	bool hit_from_kgdb_step;
 	bool step_owned;
+	bool step_uses_kgdb_ss;
 };
 
 static struct kgdb_hw_breakpoint kgdb_hw_breakpoints[KGDB_HW_MAX_SLOTS];
@@ -642,6 +644,8 @@ static void kgdb_hw_overflow_handler(struct perf_event *event,
 	/* The record must remain valid even if another CPU reuses the slot. */
 	state->hit_pc = instruction_pointer(regs);
 	state->hit_generation = armed_generation;
+	state->hit_from_kgdb_step = kgdb_single_step &&
+		atomic_read(&kgdb_cpu_doing_single_step) == cpu;
 	smp_wmb();
 	state->phase = KGDB_HW_CPU_HIT;
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
@@ -656,6 +660,14 @@ static bool kgdb_prepare_hw_step(struct pt_regs *regs,
 	bool active;
 
 	if (state->phase == KGDB_HW_CPU_STEP) {
+		if (resume_mode == KGDB_HW_RESUME_CONTINUE &&
+		    state->step_uses_kgdb_ss) {
+			if (kernel_active_single_step())
+				kernel_disable_single_step();
+			kernel_enable_single_step(regs);
+			state->step_owned = true;
+			state->step_uses_kgdb_ss = false;
+		}
 		state->resume_mode = resume_mode;
 		return true;
 	}
@@ -664,12 +676,21 @@ static bool kgdb_prepare_hw_step(struct pt_regs *regs,
 	if (instruction_pointer(regs) != state->hit_pc) {
 		state->phase = KGDB_HW_CPU_IDLE;
 		state->hit_generation = 0;
+		state->hit_from_kgdb_step = false;
 		return false;
 	}
 
 	active = kernel_active_single_step();
+	state->step_uses_kgdb_ss = active && state->hit_from_kgdb_step;
+	if (resume_mode == KGDB_HW_RESUME_CONTINUE &&
+	    state->step_uses_kgdb_ss) {
+		kernel_disable_single_step();
+		active = false;
+		state->step_uses_kgdb_ss = false;
+	}
 	state->step_owned = !active;
 	state->resume_mode = resume_mode;
+	state->hit_from_kgdb_step = false;
 	state->phase = KGDB_HW_CPU_STEP;
 	if (!active)
 		kernel_enable_single_step(regs);
@@ -688,6 +709,7 @@ static enum kgdb_hw_step_action kgdb_finish_hw_step(void)
 	owned = state->step_owned;
 	resume_mode = state->resume_mode;
 	state->step_owned = false;
+	state->step_uses_kgdb_ss = false;
 	state->resume_mode = KGDB_HW_RESUME_NONE;
 	state->hit_generation = 0;
 	state->phase = KGDB_HW_CPU_IDLE;
