@@ -187,7 +187,8 @@ void unregister_step_hook(struct step_hook *hook)
  * So we call all the registered handlers, until the right handler is
  * found which returns zero.
  */
-static int call_step_hook(struct pt_regs *regs, unsigned int esr)
+static int call_step_hook(struct pt_regs *regs, unsigned int esr,
+			  bool notify_only)
 {
 	struct step_hook *hook;
 	int retval = DBG_HOOK_ERROR;
@@ -195,6 +196,8 @@ static int call_step_hook(struct pt_regs *regs, unsigned int esr)
 	rcu_read_lock();
 
 	list_for_each_entry_rcu(hook, &step_hook, node)	{
+		if (notify_only && !hook->notify_after_handler)
+			continue;
 		retval = hook->fn(regs, esr);
 		if (retval == DBG_HOOK_HANDLED)
 			break;
@@ -242,8 +245,8 @@ static int single_step_handler(unsigned long addr, unsigned int esr,
 	    kprobe_single_step_handler(regs, esr) == DBG_HOOK_HANDLED)
 		handler_found = true;
 #endif
-	/* Step observers such as KGDB must see completion after the owner. */
-	if (call_step_hook(regs, esr) == DBG_HOOK_HANDLED)
+	/* Only explicit observers may run after another subsystem handled it. */
+	if (call_step_hook(regs, esr, handler_found) == DBG_HOOK_HANDLED)
 		handler_found = true;
 
 	if (!handler_found && user_mode(regs)) {

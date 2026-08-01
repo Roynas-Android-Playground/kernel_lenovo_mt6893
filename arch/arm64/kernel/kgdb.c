@@ -1037,7 +1037,8 @@ static struct break_hook kgdb_compiled_brkpt_hook = {
 };
 
 static struct step_hook kgdb_step_hook = {
-	.fn		= kgdb_step_brk_fn
+	.fn			= kgdb_step_brk_fn,
+	.notify_after_handler	= true,
 };
 
 static void kgdb_call_nmi_hook(void *ignored)
