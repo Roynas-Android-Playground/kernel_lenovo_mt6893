@@ -213,6 +213,7 @@ static unsigned int kgdb_hw_slot_count;
 static atomic64_t kgdb_hw_generation = ATOMIC64_INIT(0);
 static DEFINE_PER_CPU(struct kgdb_hw_cpu_state, kgdb_hw_cpu_state);
 static cpumask_t kgdb_hw_quiesced_cpus;
+static bool kgdb_hw_hotplug_disabled;
 
 static int kgdb_hw_perf_type(enum kgdb_bptype bptype)
 {
@@ -711,9 +712,17 @@ static void kgdb_hw_late_init(void)
 	if (kgdb_hw_slot_count)
 		return;
 
+	/* Preallocated perf events and manual arch installs require a fixed set. */
+	cpu_hotplug_disable();
+	kgdb_hw_hotplug_disabled = true;
 	cpumask_clear(&kgdb_hw_quiesced_cpus);
 	kgdb_hw_slot_count = min_t(unsigned int, nr_brps + nr_wrps,
 				   ARRAY_SIZE(kgdb_hw_breakpoints));
+	if (!kgdb_hw_slot_count) {
+		cpu_hotplug_enable();
+		kgdb_hw_hotplug_disabled = false;
+		return;
+	}
 	hw_breakpoint_init(&attr);
 	attr.bp_addr = (unsigned long)kgdb_arch_init;
 	attr.bp_len = HW_BREAKPOINT_LEN_1;
@@ -761,7 +770,7 @@ static void kgdb_hw_late_init(void)
 		}
 	}
 
-	pr_info("KGDB: ARM64 hardware breakpoints ready (%u BRP, %u WRP)\n",
+	pr_info("KGDB: ARM64 hardware breakpoints ready (%u BRP, %u WRP, CPU topology pinned)\n",
 		nr_brps, nr_wrps);
 	return;
 
@@ -775,6 +784,10 @@ fail:
 		slot->armed_generation = NULL;
 	}
 	kgdb_hw_slot_count = 0;
+	if (kgdb_hw_hotplug_disabled) {
+		cpu_hotplug_enable();
+		kgdb_hw_hotplug_disabled = false;
+	}
 }
 
 static void kgdb_hw_cleanup_cpu(void *unused)
@@ -834,6 +847,10 @@ static void kgdb_hw_cleanup(void)
 	}
 	cpumask_clear(&kgdb_hw_quiesced_cpus);
 	kgdb_hw_slot_count = 0;
+	if (kgdb_hw_hotplug_disabled) {
+		cpu_hotplug_enable();
+		kgdb_hw_hotplug_disabled = false;
+	}
 }
 #else
 static inline bool kgdb_prepare_hw_step(struct pt_regs *regs,
