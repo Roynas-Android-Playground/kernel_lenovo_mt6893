@@ -19,6 +19,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/atomic.h>
 #include <linux/bug.h>
 #include <linux/cpu.h>
 #include <linux/hw_breakpoint.h>
@@ -164,19 +165,32 @@ static int compiled_break;
 
 struct kgdb_hw_breakpoint {
 	bool enabled;
+	u64 generation;
 	unsigned long addr;
 	int len;
 	enum kgdb_bptype bptype;
 	int perf_type;
 	struct perf_event * __percpu *events;
+	u64 __percpu *armed_generation;
+};
+
+enum kgdb_hw_cpu_phase {
+	KGDB_HW_CPU_IDLE,
+	KGDB_HW_CPU_HIT,
+	KGDB_HW_CPU_STEP,
+};
+
+struct kgdb_hw_cpu_state {
+	enum kgdb_hw_cpu_phase phase;
+	unsigned long hit_pc;
+	u64 hit_generation;
+	bool step_owned;
 };
 
 static struct kgdb_hw_breakpoint kgdb_hw_breakpoints[KGDB_HW_MAX_SLOTS];
 static unsigned int kgdb_hw_slot_count;
-static DEFINE_PER_CPU(struct kgdb_hw_breakpoint *, kgdb_hw_hit);
-static DEFINE_PER_CPU(unsigned long, kgdb_hw_hit_pc);
-static DEFINE_PER_CPU(bool, kgdb_hw_step_pending);
-static DEFINE_PER_CPU(bool, kgdb_hw_step_owned);
+static atomic64_t kgdb_hw_generation = ATOMIC64_INIT(0);
+static DEFINE_PER_CPU(struct kgdb_hw_cpu_state, kgdb_hw_cpu_state);
 
 static int kgdb_hw_perf_type(enum kgdb_bptype bptype)
 {
@@ -264,23 +278,17 @@ fail:
 	return ret;
 }
 
-static void kgdb_hw_clear_hit(struct kgdb_hw_breakpoint *slot)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		if (per_cpu(kgdb_hw_hit, cpu) != slot)
-			continue;
-		per_cpu(kgdb_hw_hit, cpu) = NULL;
-		per_cpu(kgdb_hw_step_pending, cpu) = false;
-		per_cpu(kgdb_hw_step_owned, cpu) = false;
-	}
-}
-
 static void kgdb_hw_release_slot(struct kgdb_hw_breakpoint *slot)
 {
 	int cpu;
 	int this_cpu = raw_smp_processor_id();
+
+	/*
+	 * A CPU may still be completing the private step for this incarnation.
+	 * Retire the global metadata, but leave every CPU's hit state alone.
+	 */
+	WRITE_ONCE(slot->enabled, false);
+	smp_mb();
 
 	for_each_online_cpu(cpu) {
 		struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
@@ -300,8 +308,6 @@ static void kgdb_hw_release_slot(struct kgdb_hw_breakpoint *slot)
 			       slot->addr, cpu);
 	}
 
-	kgdb_hw_clear_hit(slot);
-	slot->enabled = false;
 	slot->addr = 0;
 	slot->len = 0;
 	slot->bptype = BP_BREAKPOINT;
@@ -347,11 +353,14 @@ static int kgdb_set_hw_breakpoint(unsigned long addr, int len,
 	if (ret)
 		return ret;
 
+	/* Publish a complete, new incarnation after all metadata is populated. */
 	slot->addr = addr;
 	slot->len = normalized_len;
 	slot->bptype = bptype;
 	slot->perf_type = perf_type;
-	slot->enabled = true;
+	slot->generation = atomic64_inc_return(&kgdb_hw_generation);
+	smp_wmb();
+	WRITE_ONCE(slot->enabled, true);
 	return 0;
 }
 
@@ -412,10 +421,11 @@ static void kgdb_disable_hw_breakpoints(struct pt_regs *regs)
 
 static void kgdb_correct_hw_breakpoints(void)
 {
+	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
 	unsigned int i;
 	int cpu = raw_smp_processor_id();
 
-	if (this_cpu_read(kgdb_hw_step_pending))
+	if (state->phase == KGDB_HW_CPU_STEP)
 		return;
 
 	for (i = 0; i < kgdb_hw_slot_count; i++) {
@@ -423,6 +433,7 @@ static void kgdb_correct_hw_breakpoints(void)
 		struct perf_event **pevent;
 		struct perf_event *event;
 		int ret;
+		u64 generation;
 
 		if (!slot->enabled || !slot->events)
 			continue;
@@ -431,6 +442,9 @@ static void kgdb_correct_hw_breakpoints(void)
 		if (!event || !event->attr.disabled)
 			continue;
 
+		generation = READ_ONCE(slot->generation);
+		*per_cpu_ptr(slot->armed_generation, cpu) = generation;
+		smp_wmb();
 		ret = kgdb_hw_prepare_event(event, slot->addr, slot->len,
 					    slot->perf_type, true);
 		if (!ret)
@@ -440,6 +454,7 @@ static void kgdb_correct_hw_breakpoints(void)
 					      slot->perf_type, false);
 			pr_err("KGDB: failed to install hw breakpoint at %lx on cpu%d: %d\n",
 			       slot->addr, cpu, ret);
+			*per_cpu_ptr(slot->armed_generation, cpu) = 0;
 			event->hw.state = PERF_HES_STOPPED;
 		} else {
 			event->hw.state = 0;
@@ -451,14 +466,18 @@ static void kgdb_hw_overflow_handler(struct perf_event *event,
 				     struct perf_sample_data *data,
 				     struct pt_regs *regs)
 {
+	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
 	struct kgdb_hw_breakpoint *slot = event->overflow_handler_context;
 
 	if (!slot || !slot->enabled || user_mode(regs) ||
-	    this_cpu_read(kgdb_hw_hit))
+	    state->phase != KGDB_HW_CPU_IDLE)
 		return;
 
-	this_cpu_write(kgdb_hw_hit, slot);
-	this_cpu_write(kgdb_hw_hit_pc, instruction_pointer(regs));
+	/* The record must remain valid even if another CPU reuses the slot. */
+	state->hit_pc = instruction_pointer(regs);
+	state->hit_generation = *this_cpu_ptr(slot->armed_generation);
+	smp_wmb();
+	state->phase = KGDB_HW_CPU_HIT;
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
 }
 
@@ -466,20 +485,22 @@ NOKPROBE_SYMBOL(kgdb_hw_overflow_handler);
 
 static bool kgdb_prepare_hw_step(struct pt_regs *regs)
 {
-	struct kgdb_hw_breakpoint *slot = this_cpu_read(kgdb_hw_hit);
+	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
 	bool active;
 
-	if (!slot)
+	if (state->phase == KGDB_HW_CPU_STEP)
+		return true;
+	if (state->phase != KGDB_HW_CPU_HIT)
 		return false;
-	if (!slot->enabled ||
-	    instruction_pointer(regs) != this_cpu_read(kgdb_hw_hit_pc)) {
-		this_cpu_write(kgdb_hw_hit, NULL);
+	if (instruction_pointer(regs) != state->hit_pc) {
+		state->phase = KGDB_HW_CPU_IDLE;
+		state->hit_generation = 0;
 		return false;
 	}
 
 	active = kernel_active_single_step();
-	this_cpu_write(kgdb_hw_step_owned, !active);
-	this_cpu_write(kgdb_hw_step_pending, true);
+	state->step_owned = !active;
+	state->phase = KGDB_HW_CPU_STEP;
 	if (!active)
 		kernel_enable_single_step(regs);
 	return true;
@@ -487,15 +508,16 @@ static bool kgdb_prepare_hw_step(struct pt_regs *regs)
 
 static bool kgdb_finish_hw_step(void)
 {
+	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
 	bool owned;
 
-	if (!this_cpu_read(kgdb_hw_step_pending))
+	if (state->phase != KGDB_HW_CPU_STEP)
 		return false;
 
-	owned = this_cpu_read(kgdb_hw_step_owned);
-	this_cpu_write(kgdb_hw_step_pending, false);
-	this_cpu_write(kgdb_hw_step_owned, false);
-	this_cpu_write(kgdb_hw_hit, NULL);
+	owned = state->step_owned;
+	state->step_owned = false;
+	state->hit_generation = 0;
+	state->phase = KGDB_HW_CPU_IDLE;
 	if (owned && kernel_active_single_step())
 		kernel_disable_single_step();
 	kgdb_correct_hw_breakpoints();
@@ -528,12 +550,20 @@ static void kgdb_hw_late_init(void)
 
 		if (slot->events)
 			continue;
+		slot->armed_generation = alloc_percpu(u64);
+		if (!slot->armed_generation) {
+			pr_err("KGDB: cannot allocate generation state for hw breakpoint slot %u\n",
+			       i);
+			goto fail;
+		}
 		slot->events = register_wide_hw_breakpoint(&attr,
 							   kgdb_hw_overflow_handler, slot);
 		if (IS_ERR((void * __force)slot->events)) {
 			pr_err("KGDB: cannot preallocate ARM64 hw breakpoint slot %u: %ld\n",
 			       i, PTR_ERR((void * __force)slot->events));
 			slot->events = NULL;
+			free_percpu(slot->armed_generation);
+			slot->armed_generation = NULL;
 			goto fail;
 		}
 
@@ -560,6 +590,8 @@ fail:
 
 		unregister_wide_hw_breakpoint(slot->events);
 		slot->events = NULL;
+		free_percpu(slot->armed_generation);
+		slot->armed_generation = NULL;
 	}
 	kgdb_hw_slot_count = 0;
 }
@@ -576,6 +608,8 @@ static void kgdb_hw_cleanup(void)
 			continue;
 		unregister_wide_hw_breakpoint(slot->events);
 		slot->events = NULL;
+		free_percpu(slot->armed_generation);
+		slot->armed_generation = NULL;
 	}
 	kgdb_hw_slot_count = 0;
 }
