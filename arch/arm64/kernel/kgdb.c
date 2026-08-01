@@ -24,13 +24,16 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/init.h>
 #include <linux/irq.h>
 #include <linux/kdebug.h>
 #include <linux/kgdb.h>
 #include <linux/kprobes.h>
+#include <linux/mutex.h>
 #include <linux/percpu.h>
 #include <linux/sched/task_stack.h>
 #include <linux/smp.h>
+#include <linux/suspend.h>
 
 #include <asm/debug-monitors.h>
 #include <asm/hw_breakpoint.h>
@@ -162,6 +165,9 @@ void kgdb_arch_set_pc(struct pt_regs *regs, unsigned long pc)
 
 static int compiled_break;
 static DEFINE_PER_CPU(bool, kgdb_step_ref_owned);
+static DEFINE_MUTEX(kgdb_hw_init_lock);
+static bool kgdb_hw_init_requested;
+static bool kgdb_hw_smp_ready;
 
 static bool kgdb_step_ref_is_owned(void)
 {
@@ -251,8 +257,29 @@ static struct kgdb_hw_breakpoint kgdb_hw_breakpoints[KGDB_HW_MAX_SLOTS];
 static unsigned int kgdb_hw_slot_count;
 static atomic64_t kgdb_hw_generation = ATOMIC64_INIT(0);
 static DEFINE_PER_CPU(struct kgdb_hw_cpu_state, kgdb_hw_cpu_state);
+static cpumask_t kgdb_hw_cpu_mask;
 static cpumask_t kgdb_hw_quiesced_cpus;
 static bool kgdb_hw_hotplug_disabled;
+static bool kgdb_hw_pm_registered;
+
+static int kgdb_hw_pm_notify(struct notifier_block *nb,
+			     unsigned long action, void *data)
+{
+	switch (action) {
+	case PM_HIBERNATION_PREPARE:
+	case PM_SUSPEND_PREPARE:
+	case PM_RESTORE_PREPARE:
+		pr_warn("KGDB: refusing system sleep while ARM64 hw breakpoint topology is pinned\n");
+		return NOTIFY_BAD;
+	default:
+		return NOTIFY_DONE;
+	}
+}
+
+static struct notifier_block kgdb_hw_pm_nb = {
+	.notifier_call = kgdb_hw_pm_notify,
+	.priority = INT_MAX,
+};
 
 static int kgdb_hw_perf_type(enum kgdb_bptype bptype)
 {
@@ -300,7 +327,8 @@ static int kgdb_hw_prepare_event(struct perf_event *event,
 
 static bool kgdb_hw_all_cpus_quiesced(void)
 {
-	return cpumask_subset(cpu_online_mask, &kgdb_hw_quiesced_cpus);
+	return cpumask_subset(&kgdb_hw_cpu_mask,
+			      &kgdb_hw_quiesced_cpus);
 }
 
 static void kgdb_hw_uninstall_cpu(struct kgdb_hw_breakpoint *slot,
@@ -395,7 +423,7 @@ static int kgdb_hw_reserve_slot(struct kgdb_hw_breakpoint *slot,
 	    !cpumask_empty(&slot->releasing_cpus))
 		return -EBUSY;
 
-	for_each_online_cpu(cpu) {
+	for_each_cpu(cpu, &kgdb_hw_cpu_mask) {
 		struct perf_event **pevent;
 		struct perf_event *event;
 
@@ -753,6 +781,7 @@ static enum kgdb_hw_step_action kgdb_finish_hw_step(void)
 static void kgdb_hw_late_init(void)
 {
 	struct perf_event_attr attr;
+	int ret;
 	unsigned int i;
 	unsigned int nr_brps = get_num_brps();
 	unsigned int nr_wrps = get_num_wrps();
@@ -761,16 +790,19 @@ static void kgdb_hw_late_init(void)
 		return;
 
 	/* Preallocated perf events and manual arch installs require a fixed set. */
+	lock_system_sleep();
 	cpu_hotplug_disable();
 	kgdb_hw_hotplug_disabled = true;
+	if (!cpumask_equal(cpu_present_mask, cpu_online_mask)) {
+		pr_err("KGDB: ARM64 hw breakpoints require every present CPU online\n");
+		goto fail_unpin;
+	}
+	cpumask_copy(&kgdb_hw_cpu_mask, cpu_online_mask);
 	cpumask_clear(&kgdb_hw_quiesced_cpus);
 	kgdb_hw_slot_count = min_t(unsigned int, nr_brps + nr_wrps,
 				   ARRAY_SIZE(kgdb_hw_breakpoints));
-	if (!kgdb_hw_slot_count) {
-		cpu_hotplug_enable();
-		kgdb_hw_hotplug_disabled = false;
-		return;
-	}
+	if (!kgdb_hw_slot_count)
+		goto fail_unpin;
 	hw_breakpoint_init(&attr);
 	attr.bp_addr = (unsigned long)kgdb_arch_init;
 	attr.bp_len = HW_BREAKPOINT_LEN_1;
@@ -805,7 +837,7 @@ static void kgdb_hw_late_init(void)
 			goto fail;
 		}
 
-		for_each_online_cpu(cpu) {
+		for_each_cpu(cpu, &kgdb_hw_cpu_mask) {
 			struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
 			struct perf_event *event = *pevent;
 
@@ -818,8 +850,16 @@ static void kgdb_hw_late_init(void)
 		}
 	}
 
-	pr_info("KGDB: ARM64 hardware breakpoints ready (%u BRP, %u WRP, CPU topology pinned)\n",
-		nr_brps, nr_wrps);
+	ret = register_pm_notifier(&kgdb_hw_pm_nb);
+	if (ret) {
+		pr_err("KGDB: cannot guard fixed hw breakpoint topology from suspend: %d\n",
+		       ret);
+		goto fail;
+	}
+	kgdb_hw_pm_registered = true;
+	pr_info("KGDB: ARM64 hardware breakpoints ready (%u BRP, %u WRP, %u CPUs pinned; suspend blocked)\n",
+		nr_brps, nr_wrps, cpumask_weight(&kgdb_hw_cpu_mask));
+	unlock_system_sleep();
 	return;
 
 fail:
@@ -832,10 +872,14 @@ fail:
 		slot->armed_generation = NULL;
 	}
 	kgdb_hw_slot_count = 0;
+fail_unpin:
+	cpumask_clear(&kgdb_hw_cpu_mask);
+	cpumask_clear(&kgdb_hw_quiesced_cpus);
 	if (kgdb_hw_hotplug_disabled) {
 		cpu_hotplug_enable();
 		kgdb_hw_hotplug_disabled = false;
 	}
+	unlock_system_sleep();
 }
 
 static void kgdb_hw_cleanup_cpu(void *unused)
@@ -860,6 +904,7 @@ static void kgdb_hw_cleanup(void)
 	unsigned int i;
 	int cpu;
 
+	lock_system_sleep();
 	for (i = 0; i < kgdb_hw_slot_count; i++) {
 		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
 
@@ -872,6 +917,7 @@ static void kgdb_hw_cleanup(void)
 	for (i = 0; i < kgdb_hw_slot_count; i++) {
 		if (!cpumask_empty(&kgdb_hw_breakpoints[i].installed_cpus)) {
 			pr_err("KGDB: retaining hw breakpoint storage with offline comparators\n");
+			unlock_system_sleep();
 			return;
 		}
 	}
@@ -894,11 +940,17 @@ static void kgdb_hw_cleanup(void)
 		WRITE_ONCE(slot->retiring, false);
 	}
 	cpumask_clear(&kgdb_hw_quiesced_cpus);
+	cpumask_clear(&kgdb_hw_cpu_mask);
 	kgdb_hw_slot_count = 0;
+	if (kgdb_hw_pm_registered) {
+		unregister_pm_notifier(&kgdb_hw_pm_nb);
+		kgdb_hw_pm_registered = false;
+	}
 	if (kgdb_hw_hotplug_disabled) {
 		cpu_hotplug_enable();
 		kgdb_hw_hotplug_disabled = false;
 	}
+	unlock_system_sleep();
 }
 #else
 static inline bool kgdb_prepare_hw_step(struct pt_regs *regs,
@@ -920,6 +972,17 @@ static inline void kgdb_hw_cleanup(void)
 {
 }
 #endif
+
+static int __init kgdb_hw_post_smp_init(void)
+{
+	mutex_lock(&kgdb_hw_init_lock);
+	kgdb_hw_smp_ready = true;
+	if (kgdb_hw_init_requested)
+		kgdb_hw_late_init();
+	mutex_unlock(&kgdb_hw_init_lock);
+	return 0;
+}
+subsys_initcall(kgdb_hw_post_smp_init);
 
 static void kgdb_arch_update_addr(struct pt_regs *regs,
 				char *remcom_in_buffer)
@@ -1136,7 +1199,10 @@ int kgdb_arch_init(void)
  */
 void kgdb_arch_exit(void)
 {
+	mutex_lock(&kgdb_hw_init_lock);
+	kgdb_hw_init_requested = false;
 	kgdb_hw_cleanup();
+	mutex_unlock(&kgdb_hw_init_lock);
 	unregister_break_hook(&kgdb_brkpt_hook);
 	unregister_break_hook(&kgdb_compiled_brkpt_hook);
 	unregister_step_hook(&kgdb_step_hook);
@@ -1177,5 +1243,9 @@ int kgdb_arch_remove_breakpoint(struct kgdb_bkpt *bpt)
 
 void kgdb_arch_late(void)
 {
-	kgdb_hw_late_init();
+	mutex_lock(&kgdb_hw_init_lock);
+	kgdb_hw_init_requested = true;
+	if (kgdb_hw_smp_ready)
+		kgdb_hw_late_init();
+	mutex_unlock(&kgdb_hw_init_lock);
 }
