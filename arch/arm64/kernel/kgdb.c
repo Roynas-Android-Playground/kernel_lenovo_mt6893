@@ -160,6 +160,19 @@ void kgdb_arch_set_pc(struct pt_regs *regs, unsigned long pc)
 
 static int compiled_break;
 
+enum kgdb_hw_resume_mode {
+	KGDB_HW_RESUME_NONE,
+	KGDB_HW_RESUME_CONTINUE,
+	KGDB_HW_RESUME_STEP,
+};
+
+enum kgdb_hw_step_action {
+	KGDB_HW_STEP_NONE,
+	KGDB_HW_STEP_PASS,
+	KGDB_HW_STEP_CONSUME,
+	KGDB_HW_STEP_REPORT,
+};
+
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 #define KGDB_HW_MAX_SLOTS	(ARM_MAX_BRP + ARM_MAX_WRP)
 
@@ -182,6 +195,7 @@ enum kgdb_hw_cpu_phase {
 
 struct kgdb_hw_cpu_state {
 	enum kgdb_hw_cpu_phase phase;
+	enum kgdb_hw_resume_mode resume_mode;
 	unsigned long hit_pc;
 	u64 hit_generation;
 	bool step_owned;
@@ -483,13 +497,16 @@ static void kgdb_hw_overflow_handler(struct perf_event *event,
 
 NOKPROBE_SYMBOL(kgdb_hw_overflow_handler);
 
-static bool kgdb_prepare_hw_step(struct pt_regs *regs)
+static bool kgdb_prepare_hw_step(struct pt_regs *regs,
+				 enum kgdb_hw_resume_mode resume_mode)
 {
 	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
 	bool active;
 
-	if (state->phase == KGDB_HW_CPU_STEP)
+	if (state->phase == KGDB_HW_CPU_STEP) {
+		state->resume_mode = resume_mode;
 		return true;
+	}
 	if (state->phase != KGDB_HW_CPU_HIT)
 		return false;
 	if (instruction_pointer(regs) != state->hit_pc) {
@@ -500,30 +517,37 @@ static bool kgdb_prepare_hw_step(struct pt_regs *regs)
 
 	active = kernel_active_single_step();
 	state->step_owned = !active;
+	state->resume_mode = resume_mode;
 	state->phase = KGDB_HW_CPU_STEP;
 	if (!active)
 		kernel_enable_single_step(regs);
 	return true;
 }
 
-static bool kgdb_finish_hw_step(void)
+static enum kgdb_hw_step_action kgdb_finish_hw_step(void)
 {
 	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
+	enum kgdb_hw_resume_mode resume_mode;
 	bool owned;
 
 	if (state->phase != KGDB_HW_CPU_STEP)
-		return false;
+		return KGDB_HW_STEP_NONE;
 
 	owned = state->step_owned;
+	resume_mode = state->resume_mode;
 	state->step_owned = false;
+	state->resume_mode = KGDB_HW_RESUME_NONE;
 	state->hit_generation = 0;
 	state->phase = KGDB_HW_CPU_IDLE;
 	if (owned && kernel_active_single_step())
 		kernel_disable_single_step();
 	kgdb_correct_hw_breakpoints();
 
-	/* Consume only the private step used to get past the hit address. */
-	return owned && !kgdb_single_step;
+	if (resume_mode == KGDB_HW_RESUME_STEP)
+		return KGDB_HW_STEP_REPORT;
+	if (resume_mode == KGDB_HW_RESUME_CONTINUE)
+		return owned ? KGDB_HW_STEP_CONSUME : KGDB_HW_STEP_PASS;
+	return KGDB_HW_STEP_PASS;
 }
 
 static void kgdb_hw_late_init(void)
@@ -614,14 +638,15 @@ static void kgdb_hw_cleanup(void)
 	kgdb_hw_slot_count = 0;
 }
 #else
-static inline bool kgdb_prepare_hw_step(struct pt_regs *regs)
+static inline bool kgdb_prepare_hw_step(struct pt_regs *regs,
+					enum kgdb_hw_resume_mode resume_mode)
 {
 	return false;
 }
 
-static inline bool kgdb_finish_hw_step(void)
+static inline enum kgdb_hw_step_action kgdb_finish_hw_step(void)
 {
-	return false;
+	return KGDB_HW_STEP_NONE;
 }
 
 static inline void kgdb_hw_late_init(void)
@@ -678,7 +703,8 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		/*
 		 * Received continue command, disable single step
 		 */
-		if (!kgdb_prepare_hw_step(linux_regs) &&
+		if (!kgdb_prepare_hw_step(linux_regs,
+					  KGDB_HW_RESUME_CONTINUE) &&
 		    kernel_active_single_step())
 			kernel_disable_single_step();
 
@@ -700,7 +726,7 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		/*
 		 * Enable single step handling
 		 */
-		if (!kgdb_prepare_hw_step(linux_regs) &&
+		if (!kgdb_prepare_hw_step(linux_regs, KGDB_HW_RESUME_STEP) &&
 		    !kernel_active_single_step())
 			kernel_enable_single_step(linux_regs);
 		err = 0;
@@ -735,11 +761,23 @@ NOKPROBE_SYMBOL(kgdb_compiled_brk_fn);
 
 static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
 {
+	enum kgdb_hw_step_action action;
+
 	if (user_mode(regs))
 		return DBG_HOOK_ERROR;
 
-	if (kgdb_finish_hw_step())
+	action = kgdb_finish_hw_step();
+	if (action == KGDB_HW_STEP_CONSUME)
 		return DBG_HOOK_HANDLED;
+	if (action == KGDB_HW_STEP_PASS)
+		return DBG_HOOK_ERROR;
+	if (action == KGDB_HW_STEP_REPORT) {
+		/* Restore the core handoff state a competing master may change. */
+		atomic_set(&kgdb_cpu_doing_single_step, raw_smp_processor_id());
+		kgdb_single_step = 1;
+		kgdb_handle_exception(1, SIGTRAP, 0, regs);
+		return DBG_HOOK_HANDLED;
+	}
 
 	if (!kgdb_single_step)
 		return DBG_HOOK_ERROR;
