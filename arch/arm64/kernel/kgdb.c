@@ -22,6 +22,7 @@
 #include <linux/atomic.h>
 #include <linux/bug.h>
 #include <linux/cpu.h>
+#include <linux/cpumask.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/irq.h>
 #include <linux/kdebug.h>
@@ -29,6 +30,7 @@
 #include <linux/kprobes.h>
 #include <linux/percpu.h>
 #include <linux/sched/task_stack.h>
+#include <linux/smp.h>
 
 #include <asm/debug-monitors.h>
 #include <asm/hw_breakpoint.h>
@@ -178,13 +180,18 @@ enum kgdb_hw_step_action {
 
 struct kgdb_hw_breakpoint {
 	bool enabled;
+	bool retiring;
 	u64 generation;
+	u64 retired_generation;
 	unsigned long addr;
 	int len;
 	enum kgdb_bptype bptype;
 	int perf_type;
 	struct perf_event * __percpu *events;
 	u64 __percpu *armed_generation;
+	cpumask_t reserved_cpus;
+	cpumask_t installed_cpus;
+	cpumask_t releasing_cpus;
 };
 
 enum kgdb_hw_cpu_phase {
@@ -205,6 +212,7 @@ static struct kgdb_hw_breakpoint kgdb_hw_breakpoints[KGDB_HW_MAX_SLOTS];
 static unsigned int kgdb_hw_slot_count;
 static atomic64_t kgdb_hw_generation = ATOMIC64_INIT(0);
 static DEFINE_PER_CPU(struct kgdb_hw_cpu_state, kgdb_hw_cpu_state);
+static cpumask_t kgdb_hw_quiesced_cpus;
 
 static int kgdb_hw_perf_type(enum kgdb_bptype bptype)
 {
@@ -250,14 +258,103 @@ static int kgdb_hw_prepare_event(struct perf_event *event,
 	return arch_validate_hwbkpt_settings(event);
 }
 
+static bool kgdb_hw_all_cpus_quiesced(void)
+{
+	return cpumask_subset(cpu_online_mask, &kgdb_hw_quiesced_cpus);
+}
+
+static void kgdb_hw_uninstall_cpu(struct kgdb_hw_breakpoint *slot,
+				  struct perf_event *event, int cpu)
+{
+	if (!cpumask_test_cpu(cpu, &slot->installed_cpus))
+		return;
+
+	arch_uninstall_hw_breakpoint(event);
+	event->attr.disabled = 1;
+	event->hw.state = PERF_HES_STOPPED;
+	smp_wmb();
+	cpumask_clear_cpu(cpu, &slot->installed_cpus);
+}
+
+static bool kgdb_hw_release_cpu_reservation(struct kgdb_hw_breakpoint *slot,
+					    struct perf_event *event,
+					    int cpu)
+{
+	/* The lockless debugger accounting is only safe after full roundup. */
+	if (!kgdb_hw_all_cpus_quiesced())
+		return false;
+	if (cpumask_test_and_set_cpu(cpu, &slot->releasing_cpus))
+		return false;
+	if (cpumask_test_cpu(cpu, &slot->installed_cpus))
+		goto busy;
+	if (!cpumask_test_cpu(cpu, &slot->reserved_cpus))
+		goto released;
+	if (dbg_release_bp_slot(event)) {
+		pr_err("KGDB: failed to release hw breakpoint at %lx on cpu%d\n",
+		       slot->addr, cpu);
+		goto busy;
+	}
+
+	cpumask_clear_cpu(cpu, &slot->reserved_cpus);
+released:
+	cpumask_clear_cpu(cpu, &slot->releasing_cpus);
+	return true;
+
+busy:
+	cpumask_clear_cpu(cpu, &slot->releasing_cpus);
+	return false;
+}
+
+static void kgdb_hw_retire_cpu(struct kgdb_hw_breakpoint *slot,
+			       struct perf_event *event, int cpu)
+{
+	kgdb_hw_uninstall_cpu(slot, event, cpu);
+}
+
+static bool kgdb_hw_finish_retire(struct kgdb_hw_breakpoint *slot)
+{
+	int cpu;
+
+	if (!READ_ONCE(slot->retiring))
+		return true;
+
+	for_each_cpu(cpu, &slot->reserved_cpus) {
+		struct perf_event **pevent;
+
+		if (cpumask_test_cpu(cpu, &slot->installed_cpus))
+			continue;
+		pevent = per_cpu_ptr(slot->events, cpu);
+		if (*pevent &&
+		    !kgdb_hw_release_cpu_reservation(slot, *pevent, cpu))
+			return false;
+	}
+
+	if (!cpumask_empty(&slot->reserved_cpus) ||
+	    !cpumask_empty(&slot->releasing_cpus))
+		return false;
+
+	slot->addr = 0;
+	slot->len = 0;
+	slot->bptype = BP_BREAKPOINT;
+	slot->perf_type = HW_BREAKPOINT_EMPTY;
+	smp_wmb();
+	WRITE_ONCE(slot->retiring, false);
+	return true;
+}
+
 static int kgdb_hw_reserve_slot(struct kgdb_hw_breakpoint *slot,
 				unsigned long addr, int len, int perf_type)
 {
-	cpumask_t reserved;
 	int cpu;
 	int ret = 0;
 
-	cpumask_clear(&reserved);
+	if (!kgdb_hw_all_cpus_quiesced())
+		return -EBUSY;
+	if (!cpumask_empty(&slot->reserved_cpus) ||
+	    !cpumask_empty(&slot->installed_cpus) ||
+	    !cpumask_empty(&slot->releasing_cpus))
+		return -EBUSY;
+
 	for_each_online_cpu(cpu) {
 		struct perf_event **pevent;
 		struct perf_event *event;
@@ -274,58 +371,55 @@ static int kgdb_hw_reserve_slot(struct kgdb_hw_breakpoint *slot,
 			goto fail;
 
 		ret = dbg_reserve_bp_slot(event);
-		if (ret) {
-			ret = -ENOSPC;
+		if (ret)
 			goto fail;
-		}
-		cpumask_set_cpu(cpu, &reserved);
+		cpumask_set_cpu(cpu, &slot->reserved_cpus);
 	}
 
 	return 0;
 
 fail:
-	for_each_cpu(cpu, &reserved) {
+	for_each_cpu(cpu, &slot->reserved_cpus) {
 		struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
 
-		dbg_release_bp_slot(*pevent);
+		kgdb_hw_release_cpu_reservation(slot, *pevent, cpu);
 	}
+	if (!cpumask_empty(&slot->reserved_cpus))
+		WRITE_ONCE(slot->retiring, true);
 	return ret;
 }
 
-static void kgdb_hw_release_slot(struct kgdb_hw_breakpoint *slot)
+static int kgdb_hw_release_slot(struct kgdb_hw_breakpoint *slot, bool force)
 {
-	int cpu;
-	int this_cpu = raw_smp_processor_id();
+	cpumask_t reserved;
+
+	if (!force && (!kgdb_hw_all_cpus_quiesced() ||
+		      !cpumask_empty(&slot->installed_cpus)))
+		return -EBUSY;
+	cpumask_copy(&reserved, &slot->reserved_cpus);
 
 	/*
 	 * A CPU may still be completing the private step for this incarnation.
-	 * Retire the global metadata, but leave every CPU's hit state alone.
+	 * Retire the global metadata, but leave every CPU's hit state and any
+	 * still-installed comparator under that CPU's ownership.
 	 */
+	slot->retired_generation = READ_ONCE(slot->generation);
+	WRITE_ONCE(slot->retiring, true);
+	smp_wmb();
 	WRITE_ONCE(slot->enabled, false);
 	smp_mb();
+	if (kgdb_hw_finish_retire(slot))
+		return 0;
+	if (force)
+		return 0;
 
-	for_each_online_cpu(cpu) {
-		struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
-		struct perf_event *event = *pevent;
-
-		if (!event)
-			continue;
-		if (!event->attr.disabled) {
-			/* All CPUs normally uninstall these as they enter KGDB. */
-			if (cpu == this_cpu)
-				arch_uninstall_hw_breakpoint(event);
-			event->attr.disabled = 1;
-			event->hw.state = PERF_HES_STOPPED;
-		}
-		if (dbg_release_bp_slot(event))
-			pr_err("KGDB: failed to release hw breakpoint at %lx on cpu%d\n",
-			       slot->addr, cpu);
+	/* A locked perf reservation mutex fails before changing any CPU. */
+	if (cpumask_equal(&reserved, &slot->reserved_cpus)) {
+		WRITE_ONCE(slot->retiring, false);
+		smp_wmb();
+		WRITE_ONCE(slot->enabled, true);
 	}
-
-	slot->addr = 0;
-	slot->len = 0;
-	slot->bptype = BP_BREAKPOINT;
-	slot->perf_type = HW_BREAKPOINT_EMPTY;
+	return -EBUSY;
 }
 
 static int kgdb_set_hw_breakpoint(unsigned long addr, int len,
@@ -353,11 +447,12 @@ static int kgdb_set_hw_breakpoint(unsigned long addr, int len,
 	for (i = 0; i < kgdb_hw_slot_count; i++) {
 		struct kgdb_hw_breakpoint *candidate = &kgdb_hw_breakpoints[i];
 
+		kgdb_hw_finish_retire(candidate);
 		if (candidate->enabled && candidate->addr == addr &&
 		    candidate->len == normalized_len &&
 		    candidate->bptype == bptype)
 			return 0;
-		if (!candidate->enabled && !slot)
+		if (!candidate->enabled && !candidate->retiring && !slot)
 			slot = candidate;
 	}
 	if (!slot || !slot->events)
@@ -394,8 +489,7 @@ static int kgdb_remove_hw_breakpoint(unsigned long addr, int len,
 		if (!slot->enabled || slot->addr != addr ||
 		    slot->len != normalized_len || slot->bptype != bptype)
 			continue;
-		kgdb_hw_release_slot(slot);
-		return 0;
+		return kgdb_hw_release_slot(slot, false);
 	}
 
 	return -ENOENT;
@@ -407,8 +501,18 @@ static void kgdb_remove_all_hw_breakpoints(void)
 
 	for (i = 0; i < kgdb_hw_slot_count; i++) {
 		if (kgdb_hw_breakpoints[i].enabled)
-			kgdb_hw_release_slot(&kgdb_hw_breakpoints[i]);
+			kgdb_hw_release_slot(&kgdb_hw_breakpoints[i], true);
 	}
+}
+
+static void kgdb_sync_hw_breakpoints(void)
+{
+	unsigned int i;
+
+	if (!kgdb_hw_all_cpus_quiesced())
+		return;
+	for (i = 0; i < kgdb_hw_slot_count; i++)
+		kgdb_hw_finish_retire(&kgdb_hw_breakpoints[i]);
 }
 
 static void kgdb_disable_hw_breakpoints(struct pt_regs *regs)
@@ -421,16 +525,16 @@ static void kgdb_disable_hw_breakpoints(struct pt_regs *regs)
 		struct perf_event **pevent;
 		struct perf_event *event;
 
-		if (!slot->enabled || !slot->events)
+		if (!slot->events)
 			continue;
 		pevent = per_cpu_ptr(slot->events, cpu);
 		event = *pevent;
-		if (!event || event->attr.disabled)
+		if (!event)
 			continue;
-		arch_uninstall_hw_breakpoint(event);
-		event->attr.disabled = 1;
-		event->hw.state = PERF_HES_STOPPED;
+		kgdb_hw_uninstall_cpu(slot, event, cpu);
 	}
+	smp_wmb();
+	cpumask_set_cpu(cpu, &kgdb_hw_quiesced_cpus);
 }
 
 static void kgdb_correct_hw_breakpoints(void)
@@ -439,6 +543,8 @@ static void kgdb_correct_hw_breakpoints(void)
 	unsigned int i;
 	int cpu = raw_smp_processor_id();
 
+	/* This CPU is leaving the all-stop reservation-accounting barrier. */
+	cpumask_clear_cpu(cpu, &kgdb_hw_quiesced_cpus);
 	if (state->phase == KGDB_HW_CPU_STEP)
 		return;
 
@@ -449,16 +555,31 @@ static void kgdb_correct_hw_breakpoints(void)
 		int ret;
 		u64 generation;
 
-		if (!slot->enabled || !slot->events)
+		if (!slot->events)
 			continue;
 		pevent = per_cpu_ptr(slot->events, cpu);
 		event = *pevent;
-		if (!event || !event->attr.disabled)
+		if (!event)
+			continue;
+		if (READ_ONCE(slot->retiring)) {
+			kgdb_hw_retire_cpu(slot, event, cpu);
+			continue;
+		}
+		if (!READ_ONCE(slot->enabled) ||
+		    !cpumask_test_cpu(cpu, &slot->reserved_cpus) ||
+		    cpumask_test_cpu(cpu, &slot->installed_cpus))
 			continue;
 
 		generation = READ_ONCE(slot->generation);
 		*per_cpu_ptr(slot->armed_generation, cpu) = generation;
+		/* Claim local ownership before hardware can be retired remotely. */
+		cpumask_set_cpu(cpu, &slot->installed_cpus);
 		smp_wmb();
+		if (!READ_ONCE(slot->enabled) || READ_ONCE(slot->retiring) ||
+		    generation != READ_ONCE(slot->generation)) {
+			cpumask_clear_cpu(cpu, &slot->installed_cpus);
+			continue;
+		}
 		ret = kgdb_hw_prepare_event(event, slot->addr, slot->len,
 					    slot->perf_type, true);
 		if (!ret)
@@ -470,8 +591,18 @@ static void kgdb_correct_hw_breakpoints(void)
 			       slot->addr, cpu, ret);
 			*per_cpu_ptr(slot->armed_generation, cpu) = 0;
 			event->hw.state = PERF_HES_STOPPED;
+			cpumask_clear_cpu(cpu, &slot->installed_cpus);
+			slot->retired_generation = generation;
+			WRITE_ONCE(slot->retiring, true);
+			smp_wmb();
+			WRITE_ONCE(slot->enabled, false);
 		} else {
 			event->hw.state = 0;
+			smp_wmb();
+			if (!READ_ONCE(slot->enabled) ||
+			    READ_ONCE(slot->retiring) ||
+			    generation != READ_ONCE(slot->generation))
+				kgdb_hw_retire_cpu(slot, event, cpu);
 		}
 	}
 }
@@ -482,14 +613,34 @@ static void kgdb_hw_overflow_handler(struct perf_event *event,
 {
 	struct kgdb_hw_cpu_state *state = this_cpu_ptr(&kgdb_hw_cpu_state);
 	struct kgdb_hw_breakpoint *slot = event->overflow_handler_context;
+	int cpu = raw_smp_processor_id();
+	u64 armed_generation;
 
-	if (!slot || !slot->enabled || user_mode(regs) ||
+	if (!slot)
+		return;
+	armed_generation = *this_cpu_ptr(slot->armed_generation);
+	if (!READ_ONCE(slot->enabled)) {
+		if (READ_ONCE(slot->retiring) &&
+		    armed_generation == READ_ONCE(slot->retired_generation)) {
+			/* A timed-out CPU owns the final local uninstall. */
+			kgdb_hw_retire_cpu(slot, event, cpu);
+			return;
+		}
+		pr_err("KGDB: stale hw breakpoint generation %llu on cpu%d\n",
+		       (unsigned long long)armed_generation, cpu);
+		arch_uninstall_hw_breakpoint(event);
+		event->attr.disabled = 1;
+		event->hw.state = PERF_HES_STOPPED;
+		cpumask_clear_cpu(cpu, &slot->installed_cpus);
+	}
+	if ((READ_ONCE(slot->enabled) &&
+	     !cpumask_test_cpu(cpu, &slot->installed_cpus)) || user_mode(regs) ||
 	    state->phase != KGDB_HW_CPU_IDLE)
 		return;
 
 	/* The record must remain valid even if another CPU reuses the slot. */
 	state->hit_pc = instruction_pointer(regs);
-	state->hit_generation = *this_cpu_ptr(slot->armed_generation);
+	state->hit_generation = armed_generation;
 	smp_wmb();
 	state->phase = KGDB_HW_CPU_HIT;
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
@@ -560,6 +711,7 @@ static void kgdb_hw_late_init(void)
 	if (kgdb_hw_slot_count)
 		return;
 
+	cpumask_clear(&kgdb_hw_quiesced_cpus);
 	kgdb_hw_slot_count = min_t(unsigned int, nr_brps + nr_wrps,
 				   ARRAY_SIZE(kgdb_hw_breakpoints));
 	hw_breakpoint_init(&attr);
@@ -574,6 +726,11 @@ static void kgdb_hw_late_init(void)
 
 		if (slot->events)
 			continue;
+		cpumask_clear(&slot->reserved_cpus);
+		cpumask_clear(&slot->installed_cpus);
+		cpumask_clear(&slot->releasing_cpus);
+		WRITE_ONCE(slot->enabled, false);
+		WRITE_ONCE(slot->retiring, false);
 		slot->armed_generation = alloc_percpu(u64);
 		if (!slot->armed_generation) {
 			pr_err("KGDB: cannot allocate generation state for hw breakpoint slot %u\n",
@@ -620,21 +777,62 @@ fail:
 	kgdb_hw_slot_count = 0;
 }
 
+static void kgdb_hw_cleanup_cpu(void *unused)
+{
+	unsigned int i;
+	int cpu = raw_smp_processor_id();
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+		struct perf_event **pevent;
+
+		if (!slot->events)
+			continue;
+		pevent = per_cpu_ptr(slot->events, cpu);
+		if (*pevent)
+			kgdb_hw_uninstall_cpu(slot, *pevent, cpu);
+	}
+}
+
 static void kgdb_hw_cleanup(void)
 {
 	unsigned int i;
+	int cpu;
 
-	kgdb_remove_all_hw_breakpoints();
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
+
+		WRITE_ONCE(slot->retiring, true);
+		smp_wmb();
+		WRITE_ONCE(slot->enabled, false);
+	}
+	on_each_cpu(kgdb_hw_cleanup_cpu, NULL, 1);
+
+	for (i = 0; i < kgdb_hw_slot_count; i++) {
+		if (!cpumask_empty(&kgdb_hw_breakpoints[i].installed_cpus)) {
+			pr_err("KGDB: retaining hw breakpoint storage with offline comparators\n");
+			return;
+		}
+	}
+
 	for (i = 0; i < kgdb_hw_slot_count; i++) {
 		struct kgdb_hw_breakpoint *slot = &kgdb_hw_breakpoints[i];
 
 		if (!slot->events)
 			continue;
+		for_each_cpu(cpu, &slot->reserved_cpus) {
+			struct perf_event **pevent = per_cpu_ptr(slot->events, cpu);
+
+			release_bp_slot(*pevent);
+			cpumask_clear_cpu(cpu, &slot->reserved_cpus);
+		}
 		unregister_wide_hw_breakpoint(slot->events);
 		slot->events = NULL;
 		free_percpu(slot->armed_generation);
 		slot->armed_generation = NULL;
+		WRITE_ONCE(slot->retiring, false);
 	}
+	cpumask_clear(&kgdb_hw_quiesced_cpus);
 	kgdb_hw_slot_count = 0;
 }
 #else
@@ -884,6 +1082,7 @@ struct kgdb_arch arch_kgdb_ops = {
 	.remove_hw_breakpoint	= kgdb_remove_hw_breakpoint,
 	.disable_hw_break	= kgdb_disable_hw_breakpoints,
 	.remove_all_hw_break	= kgdb_remove_all_hw_breakpoints,
+	.sync_hw_break		= kgdb_sync_hw_breakpoints,
 	.correct_hw_break	= kgdb_correct_hw_breakpoints,
 #endif
 };
