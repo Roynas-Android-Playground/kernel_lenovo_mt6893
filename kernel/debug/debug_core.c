@@ -606,6 +606,8 @@ return_normal:
 		udelay(1000);
 	if (!time_left)
 		pr_crit("Timed out waiting for secondary CPUs.\n");
+	if (arch_kgdb_ops.sync_hw_break)
+		arch_kgdb_ops.sync_hw_break();
 
 	/*
 	 * At this point the primary processor is completely
