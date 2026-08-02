@@ -237,6 +237,8 @@ extern void kgdb_arch_late(void);
  * hardware breakpoints for a single cpu.
  * @remove_all_hw_break: Allow an architecture to specify how to remove all
  * hardware breakpoints.
+ * @sync_hw_break: Allow an architecture to finalize hardware breakpoint
+ * state on the debugger master after the CPU roundup barrier.
  * @correct_hw_break: Allow an architecture to specify how to correct the
  * hardware debug registers.
  * @enable_nmi: Manage NMI-triggered entry to KGDB
@@ -251,6 +253,7 @@ struct kgdb_arch {
 	int	(*remove_hw_breakpoint)(unsigned long, int, enum kgdb_bptype);
 	void	(*disable_hw_break)(struct pt_regs *regs);
 	void	(*remove_all_hw_break)(void);
+	void	(*sync_hw_break)(void);
 	void	(*correct_hw_break)(void);
 
 	void	(*enable_nmi)(bool on);

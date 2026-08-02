@@ -42,12 +42,13 @@ static struct device_attribute power_supply_attrs[];
 
 static const char * const power_supply_type_text[] = {
 	"Unknown", "Battery", "UPS", "Mains", "USB",
-	"USB_DCP", "USB_CDP", "USB_ACA", "USB_C",
+	"USB_DCP", "USB_CDP", "USB_ACA", "Wireless", "USB_C",
 	"USB_PD", "USB_PD_DRP", "BrickID"
 };
 
 static const char * const power_supply_status_text[] = {
-	"Unknown", "Charging", "Discharging", "Not charging", "Full"
+	"Unknown", "Charging", "Discharging", "Not charging", "Full",
+	"Cmd discharging"
 };
 
 static const char * const power_supply_charge_type_text[] = {
@@ -58,6 +59,10 @@ static const char * const power_supply_health_text[] = {
 	"Unknown", "Good", "Overheat", "Dead", "Over voltage",
 	"Unspecified failure", "Cold", "Watchdog timer expire",
 	"Safety timer expire", "Over current", "Warm", "Cool", "Hot"
+};
+
+static char *battery_type[] = {
+	"Unknow", "feimaotui-8000mAh", "xinwangda-8000mAh"
 };
 
 static const char * const power_supply_technology_text[] = {
@@ -107,6 +112,9 @@ static ssize_t power_supply_show_property(struct device *dev,
 	else if (off == POWER_SUPPLY_PROP_HEALTH)
 		return sprintf(buf, "%s\n",
 			       power_supply_health_text[value.intval]);
+	else if (off == POWER_SUPPLY_PROP_BATTERY_TYPE)
+		return sprintf(buf, "%s\n",
+			       battery_type[value.intval]);
 	else if (off == POWER_SUPPLY_PROP_TECHNOLOGY)
 		return sprintf(buf, "%s\n",
 			       power_supply_technology_text[value.intval]);
@@ -249,15 +257,54 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(precharge_current),
 	POWER_SUPPLY_ATTR(charge_term_current),
 	POWER_SUPPLY_ATTR(calibrate),
+	POWER_SUPPLY_ATTR(typec_cc_orientation),//yds
+	POWER_SUPPLY_ATTR(p537_usb_speed),//yds
+	/* sc8551 */
+	POWER_SUPPLY_ATTR(charging_enable),
+	POWER_SUPPLY_ATTR(sc_bus_voltage),
+	POWER_SUPPLY_ATTR(sc_bus_current),
+	POWER_SUPPLY_ATTR(sc_bus_temperature),
+	POWER_SUPPLY_ATTR(sc_vbus_present),
+	POWER_SUPPLY_ATTR(sc_vbus_error_status),
+	POWER_SUPPLY_ATTR(sc_battery_present),
+	POWER_SUPPLY_ATTR(sc_battery_voltage),
+	POWER_SUPPLY_ATTR(sc_battery_current),
+	POWER_SUPPLY_ATTR(sc_battery_temperature),
+	POWER_SUPPLY_ATTR(sc_alarm_status),
+	POWER_SUPPLY_ATTR(sc_fault_status),
+	POWER_SUPPLY_ATTR(sc_die_temperature),
+	POWER_SUPPLY_ATTR(sc_pps_supported),
+	/* ln8000 */
+	POWER_SUPPLY_ATTR(ti_charging_enabled),
+	POWER_SUPPLY_ATTR(ti_bus_voltage),
+	POWER_SUPPLY_ATTR(ti_bus_current),
+	POWER_SUPPLY_ATTR(ti_bus_temperature),
+	POWER_SUPPLY_ATTR(ti_vbus_present),
+	POWER_SUPPLY_ATTR(ti_battery_present),
+	POWER_SUPPLY_ATTR(ti_battery_voltage),
+	POWER_SUPPLY_ATTR(ti_battery_current),
+	POWER_SUPPLY_ATTR(ti_battery_temperature),
+	POWER_SUPPLY_ATTR(hv_charge_enabled),
+	POWER_SUPPLY_ATTR(ti_die_temperature),
+	POWER_SUPPLY_ATTR(ti_alarm_status),
+	POWER_SUPPLY_ATTR(ti_fault_status),
+	POWER_SUPPLY_ATTR(ti_reg_status),
+	POWER_SUPPLY_ATTR(ti_bypass_mode_enabled),
+	POWER_SUPPLY_ATTR(ti_set_bus_protection_for_qc3),
 	/* Local extensions */
+	POWER_SUPPLY_ATTR(battery_charging_enabled),
+	POWER_SUPPLY_ATTR(shipping_mode),
 	POWER_SUPPLY_ATTR(usb_hc),
 	POWER_SUPPLY_ATTR(usb_otg),
 	POWER_SUPPLY_ATTR(charge_enabled),
+	POWER_SUPPLY_ATTR(battery_maintain),
+	POWER_SUPPLY_ATTR(battery_protected),
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(model_name),
 	POWER_SUPPLY_ATTR(manufacturer),
+	POWER_SUPPLY_ATTR(battery_type),
 	POWER_SUPPLY_ATTR(serial_number),
 };
 

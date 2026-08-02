@@ -92,6 +92,8 @@ struct task_struct;
 struct step_hook {
 	struct list_head node;
 	int (*fn)(struct pt_regs *regs, unsigned int esr);
+	/* Also notify this hook after perf or kprobes owns the exception. */
+	bool notify_after_handler;
 };
 
 void register_step_hook(struct step_hook *hook);

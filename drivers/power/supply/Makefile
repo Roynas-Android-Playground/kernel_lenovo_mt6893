@@ -82,3 +82,14 @@ obj-$(CONFIG_CHARGER_TPS65090)	+= tps65090-charger.o
 obj-$(CONFIG_CHARGER_TPS65217)	+= tps65217_charger.o
 obj-$(CONFIG_AXP288_FUEL_GAUGE) += axp288_fuel_gauge.o
 obj-$(CONFIG_AXP288_CHARGER)	+= axp288_charger.o
+obj-$(CONFIG_SC8551_CHARGER)	+= sc8551.o pd_policy_manager.o
+obj-$(CONFIG_LN8000_CHARGER)	+= ln8000_charger.o pd_policy_manager.o
+ifeq ($(CONFIG_MACH_MT8173),y)
+else
+	obj-y += mediatek/
+endif
+
+ifeq ($(CONFIG_CUSTOM_BATTERY_EXTERNAL_CHANNEL),y)
+	obj-y += k6885v1_64_alpha/
+endif
+

@@ -54,6 +54,9 @@ MODULE_LICENSE("GPL");
 
 #include "hid-ids.h"
 
+extern int screen_is_black;
+extern void report_power_key(void);
+
 /* quirks to control the device */
 #define MT_QUIRK_NOT_SEEN_MEANS_UP	BIT(0)
 #define MT_QUIRK_SLOT_IS_CONTACTID	BIT(1)
@@ -173,6 +176,7 @@ static void mt_post_parse(struct mt_device *td);
 #define MT_CLS_ASUS				0x010b
 #define MT_CLS_VTL				0x0110
 #define MT_CLS_GOOGLE				0x0111
+#define MT_CLS_HOLTEX				0x0113
 
 #define MT_DEFAULT_MAXCONTACT	10
 #define MT_MAX_MAXCONTACT	250
@@ -616,6 +620,8 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 		    (usage->hid & HID_USAGE) > 1)
 			code--;
 		hid_map_usage(hi, usage, bit, max, EV_KEY, code);
+		if (!*bit)
+			return -1;
 		input_set_capability(hi->input, EV_KEY, code);
 		return 1;
 
@@ -805,7 +811,13 @@ static void mt_process_mt_event(struct hid_device *hid, struct hid_field *field,
 			if ((cls == MT_CLS_WIN_8 || cls == MT_CLS_WIN_8_DUAL) &&
 			    !first_packet)
 				return;
-
+			if(screen_is_black == 1){
+				if(usage->code==0x110||usage->code==0x112){
+					report_power_key();
+					screen_is_black = 0;
+					return;
+				}
+			}
 			if (usage->type)
 				input_event(input, usage->type, usage->code,
 						value);
@@ -1412,6 +1424,16 @@ static void mt_remove(struct hid_device *hdev)
  * So there is no point in adding here any device with MT_CLS_DEFAULT.
  */
 static const struct hid_device_id mt_devices[] = {
+
+	{ .driver_data = MT_CLS_HOLTEX,
+		HID_DEVICE(BUS_I2C, HID_GROUP_ANY,
+			I2C_VENDOR_ID_HT32F5_KEY,
+			I2C_PRODUCT_ID_HT32F5_KEY) },
+
+	{ .driver_data = MT_CLS_HOLTEX,
+		HID_DEVICE(BUS_I2C, HID_GROUP_ANY,
+			I2C_VENDOR_ID_HT32F5_MOUSE,
+			I2C_PRODUCT_ID_HT32F5_MOUSE) },
 
 	/* 3M panels */
 	{ .driver_data = MT_CLS_3M,

@@ -1692,6 +1692,7 @@ static int bq27xxx_battery_voltage(struct bq27xxx_device_info *di,
 {
 	int volt;
 
+	mdelay(1);
 	volt = bq27xxx_read(di, BQ27XXX_REG_VOLT, false);
 	if (volt < 0) {
 		dev_err(di->dev, "error reading voltage\n");

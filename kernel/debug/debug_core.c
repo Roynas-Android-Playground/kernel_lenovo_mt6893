@@ -135,7 +135,6 @@ struct task_struct		*kgdb_usethread;
 struct task_struct		*kgdb_contthread;
 
 int				kgdb_single_step;
-static pid_t			kgdb_sstep_pid;
 
 /* to keep track of the CPU which is doing the single stepping*/
 atomic_t			kgdb_cpu_doing_single_step = ATOMIC_INIT(-1);
@@ -470,9 +469,9 @@ static int kgdb_cpu_enter(struct kgdb_state *ks, struct pt_regs *regs,
 		int exception_state)
 {
 	unsigned long flags;
-	int sstep_tries = 100;
 	int error;
 	int cpu;
+	int sstep_cpu;
 	int trace_on = 0;
 	int online_cpus = num_online_cpus();
 	u64 time_left;
@@ -551,14 +550,12 @@ return_normal:
 	}
 
 	/*
-	 * For single stepping, try to only enter on the processor
-	 * that was single stepping.  To guard against a deadlock, the
-	 * kernel will only try for the value of sstep_tries before
-	 * giving up and continuing on.
+	 * The stepping CPU retains dbg_slave_lock until its step exception.
+	 * A simultaneous exception must not become master and alter that
+	 * global handoff state; only the recorded CPU can complete the step.
 	 */
-	if (atomic_read(&kgdb_cpu_doing_single_step) != -1 &&
-	    (kgdb_info[cpu].task &&
-	     kgdb_info[cpu].task->pid != kgdb_sstep_pid) && --sstep_tries) {
+	sstep_cpu = atomic_read(&kgdb_cpu_doing_single_step);
+	if (sstep_cpu != -1 && sstep_cpu != cpu) {
 		atomic_set(&kgdb_active, -1);
 		raw_spin_unlock(&dbg_master_lock);
 		dbg_touch_watchdogs();
@@ -609,6 +606,8 @@ return_normal:
 		udelay(1000);
 	if (!time_left)
 		pr_crit("Timed out waiting for secondary CPUs.\n");
+	if (arch_kgdb_ops.sync_hw_break)
+		arch_kgdb_ops.sync_hw_break();
 
 	/*
 	 * At this point the primary processor is completely
@@ -658,13 +657,6 @@ cpu_master_loop:
 	}
 
 kgdb_restore:
-	if (atomic_read(&kgdb_cpu_doing_single_step) != -1) {
-		int sstep_cpu = atomic_read(&kgdb_cpu_doing_single_step);
-		if (kgdb_info[sstep_cpu].task)
-			kgdb_sstep_pid = kgdb_info[sstep_cpu].task->pid;
-		else
-			kgdb_sstep_pid = 0;
-	}
 	if (arch_kgdb_ops.correct_hw_break)
 		arch_kgdb_ops.correct_hw_break();
 	if (trace_on)

@@ -483,9 +483,9 @@ int snd_soc_platform_read(struct snd_soc_platform *platform,
 int snd_soc_platform_write(struct snd_soc_platform *platform,
 					unsigned int reg, unsigned int val);
 int soc_new_pcm(struct snd_soc_pcm_runtime *rtd, int num);
-#ifdef CONFIG_SND_SOC_COMPRESS
+
 int snd_soc_new_compress(struct snd_soc_pcm_runtime *rtd, int num);
-#endif
+
 
 struct snd_pcm_substream *snd_soc_get_dai_substream(struct snd_soc_card *card,
 		const char *dai_link, int stream);
@@ -794,7 +794,9 @@ struct snd_soc_component_driver {
 	void (*remove)(struct snd_soc_component *);
 	int (*suspend)(struct snd_soc_component *);
 	int (*resume)(struct snd_soc_component *);
-
+	unsigned int (*read)(struct snd_soc_component *, unsigned int);
+	int (*write)(struct snd_soc_component *, unsigned int, unsigned int);
+	const struct snd_compr_ops *compr_ops;
 	/* component wide operations */
 	int (*set_sysclk)(struct snd_soc_component *component,
 			  int clk_id, int source, unsigned int freq, int dir);
@@ -1127,6 +1129,8 @@ struct snd_soc_card {
 
 	struct mutex mutex;
 	struct mutex dapm_mutex;
+
+	spinlock_t dpcm_lock;
 
 	bool instantiated;
 
