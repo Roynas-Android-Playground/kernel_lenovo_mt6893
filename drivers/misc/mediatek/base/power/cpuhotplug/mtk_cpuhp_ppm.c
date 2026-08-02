@@ -18,12 +18,14 @@
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/smp.h>
 #include <mtk_ppm_api.h>
 #include <linux/nmi.h>
 
 #include "mtk_cpuhp_private.h"
 
 static struct cpumask ppm_online_cpus;
+static struct cpumask ppm_allowed_cpus;
 static struct task_struct *ppm_kthread;
 static DEFINE_MUTEX(ppm_mutex);
 
@@ -154,10 +156,29 @@ Retry_OFF:
 	return 0;
 }
 
+static void ppm_init_allowed_cpus(void)
+{
+	if (setup_max_cpus < num_present_cpus())
+		cpumask_copy(&ppm_allowed_cpus, cpu_online_mask);
+	else
+		cpumask_copy(&ppm_allowed_cpus, cpu_present_mask);
+	cpumask_set_cpu(get_boot_cpu_id(), &ppm_allowed_cpus);
+
+	pr_info("maxcpus=%u limits PPM CPUs to %*pbl\n",
+		setup_max_cpus, cpumask_pr_args(&ppm_allowed_cpus));
+}
+
+static void ppm_apply_cpu_limit(cpumask_t *cpus)
+{
+	cpumask_and(cpus, cpus, &ppm_allowed_cpus);
+	cpumask_set_cpu(get_boot_cpu_id(), cpus);
+}
+
 static void ppm_limit_callback(struct ppm_client_req req)
 {
 	mutex_lock(&ppm_mutex);
 	cpumask_copy(&ppm_online_cpus, &req.online_core[0]);
+	ppm_apply_cpu_limit(&ppm_online_cpus);
 	mutex_unlock(&ppm_mutex);
 
 	wake_up_process(ppm_kthread);
@@ -169,7 +190,9 @@ void ppm_notifier(void)
 	unsigned int cpu;
 	struct device_node *dn = 0;
 	const char *smp_method = 0;
+	ppm_init_allowed_cpus();
 	cpumask_copy(&ppm_online_cpus, cpu_online_mask);
+	ppm_apply_cpu_limit(&ppm_online_cpus);
 
 	for_each_present_cpu(cpu) {
 		dn = of_get_cpu_node(cpu, NULL);
