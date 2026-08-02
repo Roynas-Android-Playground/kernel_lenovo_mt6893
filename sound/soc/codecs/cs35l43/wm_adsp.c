@@ -2841,7 +2841,7 @@ out:
 	return ret;
 }
 
-extern audio_boxid_get(void);
+extern int audio_boxid_get(void);
 int wm_adsp_load_coeff(struct wm_adsp *dsp)
 {
 	LIST_HEAD(buf_list);

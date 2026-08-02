@@ -1661,7 +1661,7 @@ static inline void hidinput_configure_usages(struct hid_input *hidinput,
 						 report->field[i]->usage + j);
 }
 
-void report_power_key()
+void report_power_key(void)
 {
 	printk(KERN_DEBUG "zzz-report_power_key");
 	input_report_key(kb_input_dev, KEY_POWER, 1);
@@ -1818,4 +1818,3 @@ void hidinput_disconnect(struct hid_device *hid)
 	hid->input_registered = false;
 }
 EXPORT_SYMBOL_GPL(hidinput_disconnect);
-

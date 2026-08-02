@@ -343,9 +343,9 @@ done:
 		charger_dev_enable(info->chg1_dev, true);
 	mutex_unlock(&swchgalg->ichg_aicr_access_mutex);
 }
-static g_chg_cycle_count = -1;
-static g_sw_jeita_cv = -1;
-static g_battery_cv = -1;
+static int g_chg_cycle_count = -1;
+static int g_sw_jeita_cv = -1;
+static int g_battery_cv = -1;
 extern int battery_maintain_enable;
 
 static void swchg_select_cv(struct charger_manager *info)

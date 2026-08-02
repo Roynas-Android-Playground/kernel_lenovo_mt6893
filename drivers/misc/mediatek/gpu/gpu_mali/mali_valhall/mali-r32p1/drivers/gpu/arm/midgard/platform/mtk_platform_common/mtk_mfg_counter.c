@@ -769,7 +769,7 @@ void mtk_mfg_counter_destroy(void)
 
 
 // init but don't enable met
-int gator_gpu_pmu_init()
+int gator_gpu_pmu_init(void)
 {
 	int ret = PMU_OK;
 	int i, j, cnt, block_type;
@@ -876,4 +876,3 @@ void mtk_GPU_STALL_RAW(unsigned int *diff, int size)
 	}
 #endif
 }
-
