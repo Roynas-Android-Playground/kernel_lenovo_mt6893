@@ -268,7 +268,7 @@ void ssusb_debugfs_init(struct ssusb_mtk *ssusb)
 {
 	int idx = 0;
 
-	proc_mkdir(PROC_DIR_MTK_USB, NULL);
+	/* phy_hal_init() creates the shared /proc/mtk_usb directory. */
 
 	if (ssusb->u3_loopb_support) {
 		proc_files[idx] = proc_create_data(PROC_FILE_SMTERRCOUNT, 0644, NULL,
@@ -306,5 +306,4 @@ void ssusb_debugfs_exit(struct ssusb_mtk *ssusb)
 			proc_remove(proc_files[idx]);
 	}
 }
-
 

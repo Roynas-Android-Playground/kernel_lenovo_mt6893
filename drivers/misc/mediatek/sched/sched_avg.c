@@ -78,6 +78,7 @@ struct cluster_heavy_tbl_t {
 struct cluster_heavy_tbl_t *cluster_heavy_tbl;
 
 static int init_heavy_tlb(void);
+static inline bool is_all_cpu_parsed(void);
 
 /*
  * Big Task Tracking:
@@ -1244,6 +1245,9 @@ void sched_update_nr_heavy_prod(int invoker, struct task_struct *p,
 	int ack_cap = -1;
 #endif
 	enum overutil_type_t over_type = NO_OVERUTIL;
+
+	if (!init_heavy && !is_all_cpu_parsed())
+		return;
 
 	if (!init_heavy) {
 		init_heavy_tlb();

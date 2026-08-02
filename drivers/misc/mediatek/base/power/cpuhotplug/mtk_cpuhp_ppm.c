@@ -42,15 +42,28 @@ static int ppm_thread_fn(void *data)
 	struct cpumask ppm_cpus_req;
 
 	while (!kthread_should_stop()) {
-		if (cpumask_equal(&ppm_online_cpus, cpu_online_mask)) {
-			set_current_state(TASK_INTERRUPTIBLE);
+		/*
+		 * A CPU can be removed from cpu_present_mask after a failed late
+		 * bring-up.  PPM may still include it in the last policy request;
+		 * comparing that stale request directly with cpu_online_mask makes
+		 * this thread spin forever without any work it can perform.
+		 *
+		 * Arm the sleep before taking a coherent request snapshot so a
+		 * concurrent policy update cannot be lost between the comparison
+		 * and schedule().
+		 */
+		set_current_state(TASK_INTERRUPTIBLE);
+		mutex_lock(&ppm_mutex);
+		cpumask_and(&ppm_cpus_req, &ppm_online_cpus,
+			    cpu_present_mask);
+		mutex_unlock(&ppm_mutex);
+
+		if (cpumask_equal(&ppm_cpus_req, cpu_online_mask)) {
 			schedule();
 			continue;
 		}
 
 		set_current_state(TASK_RUNNING);
-
-		cpumask_copy(&ppm_cpus_req, &ppm_online_cpus);
 
 #ifdef CONFIG_PM_SLEEP
 		if (hps_ws)

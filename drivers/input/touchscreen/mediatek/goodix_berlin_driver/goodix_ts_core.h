@@ -50,8 +50,6 @@
 #define GOODIX_MAX_BUFFER		32
 #define MAX_IO_CONTROL_REPORT	16
 #define TPD_ROTATION_SUPPORT
-#define SCREEN_MAX_X		2560
-#define SCREEN_MAX_Y		1536
 
 #define P537_PALM_EN	1
 
@@ -281,6 +279,7 @@ struct goodix_ts_board_data {
 	unsigned int panel_max_p; /*pressure*/
 
 	bool pen_enable;
+	bool esd_enable;
 	char fw_name[GOODIX_MAX_STR_LABLE_LEN];
 	char cfg_bin_name[GOODIX_MAX_STR_LABLE_LEN];
 };
