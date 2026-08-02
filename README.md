@@ -28,8 +28,8 @@ dedicated KGDB configuration and kernel command-line controls.
 
 - `p11_pro_2gen_defconfig` — Lenovo's normal device configuration.
 - `p11_pro_2gen_debug_defconfig` — Lenovo's original debug configuration.
-- `p11_pro_2gen_kgdb_defconfig` — the watchdog-safe KGDB and diagnostic
-  configuration used for Alex development.
+- `p11_pro_2gen_kgdb.config` — the watchdog-safe KGDB and diagnostic fragment
+  applied on top of Lenovo's debug configuration.
 
 The tracked `localversion-alex` file gives all configurations the kernel release
 suffix `-alex`.
@@ -37,7 +37,9 @@ suffix `-alex`.
 For configuration-only validation:
 
 ```sh
-make O=out ARCH=arm64 p11_pro_2gen_kgdb_defconfig
+make O=out ARCH=arm64 p11_pro_2gen_debug_defconfig
+ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
+  out/.config arch/arm64/configs/p11_pro_2gen_kgdb.config
 ```
 
 A complete kernel build requires a compatible Android ARM64/Clang toolchain and
