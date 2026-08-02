@@ -19,71 +19,31 @@
 static int read_timeout_handler(unsigned long addr,
 	unsigned int fsr, struct pt_regs *regs)
 {
-	int i = 0;
+	(void)addr;
+	(void)fsr;
+	(void)regs;
 
-#ifdef SYSTRACKER_TEST_SUIT
-	systracker_test_cleanup();
-#endif
-	/* avoid nested hit */
-	if (readl(IOMEM(BUS_DBG_CON)) &
-		(BUS_DBG_CON_IRQ_WP_STA | BUS_DBG_CON_IRQ_WP_RD_STA)) {
-		pr_notice("%s:%d: WP_TRACKER hit\n", __func__, __LINE__);
-		systracker_watchpoint_disable();
-	} else
-		pr_notice("%s:%d: read timeout\n", __func__, __LINE__);
-
-	aee_dump_backtrace(regs, NULL);
-
-	if (readl(IOMEM(BUS_DBG_CON)) &
-		(BUS_DBG_CON_IRQ_AR_STA0|BUS_DBG_CON_IRQ_AR_STA1)) {
-		for (i = 0; i < 32; i++) {
-			pr_notice("AR_TRACKER Timeout Entry[%d]: ReadAddr:0x%x,",
-			       i,
-			       readl(IOMEM(BUS_DBG_AR_TRACK_L(i))));
-
-			pr_notice("Length:0x%x, TransactionID:0x%x!\n",
-			       readl(IOMEM(BUS_DBG_AR_TRACK_H(i))),
-			       readl(IOMEM(BUS_DBG_AR_TRANS_TID(i))));
-		}
-	}
-
-	/* return -1 to indicate kernel go on its flow */
-	return -1;
+	/*
+	 * DFSC 0x10 describes every synchronous external abort, not just a bus
+	 * tracker timeout. Never issue more tracker MMIO reads from this path:
+	 * they can abort recursively and exhaust the 16 KiB exception stack.
+	 * Returning an error lets do_mem_abort emit FAR, ESR, CPU, PC, LR and the
+	 * full register frame through the generic one-shot fatal path.
+	 */
+	return 1;
 }
 
 static void write_timeout_handler(struct pt_regs *regs, void *priv)
 {
-	int i = 0;
+	(void)priv;
 
-#ifdef SYSTRACKER_TEST_SUIT
-	systracker_test_cleanup();
-#endif
-	/* avoid nested hit */
-	if (readl(IOMEM(BUS_DBG_CON)) &
-		(BUS_DBG_CON_IRQ_WP_STA | BUS_DBG_CON_IRQ_WP_RD_STA)) {
-		pr_notice("%s:%d: WP_TRACKER hit\n", __func__, __LINE__);
-		systracker_watchpoint_disable();
-	} else
-		pr_debug("%s:%d: write timeout\n", __func__, __LINE__);
-
-	aee_dump_backtrace(regs, NULL);
-
-	if (readl(IOMEM(BUS_DBG_CON)) &
-		((BUS_DBG_CON_IRQ_AW_STA0|BUS_DBG_CON_IRQ_AW_STA1))) {
-		for (i = 0; i < 32; i++) {
-			pr_notice("AW_TRACKER Timeout Entry[%d]: WriteAddr:0x%x, ",
-			       i,
-			       readl(IOMEM(BUS_DBG_AW_TRACK_L(i))));
-			pr_notice("Length:0x%x, TransactionID:0x%x!\n",
-			       readl(IOMEM(BUS_DBG_AW_TRACK_H(i))),
-			       readl(IOMEM(BUS_DBG_AW_TRANS_TID(i))));
-		}
-
-		pr_notice("W_TRACK_DATA6:0x%x, W_TRACK_DATA7:0x%x, W_TRACK_DATA_VALID:0x%x!\n",
-			       readl(IOMEM(BUS_DBG_W_TRACK_DATA6)),
-			       readl(IOMEM(BUS_DBG_W_TRACK_DATA7)),
-			       readl(IOMEM(BUS_DBG_W_TRACK_DATA_VALID)));
-	}
+	/* Preserve the interrupted frame without tracker MMIO or deep unwinding. */
+	pr_crit("Asynchronous SError frame: cpu:%d pc:%016llx lr:%016llx "
+		"sp:%016llx pstate:%016llx\n",
+		raw_smp_processor_id(), (unsigned long long)regs->pc,
+		(unsigned long long)regs->regs[30],
+		(unsigned long long)regs->sp,
+		(unsigned long long)regs->pstate);
 }
 
 static int systracker_platform_hook_fault(void)
@@ -93,9 +53,9 @@ static int systracker_platform_hook_fault(void)
 	/* We use ARM64's synchroneous external abort for read timeout */
 	hook_fault_code(0x10,
 			read_timeout_handler,
-			SIGTRAP,
+			SIGBUS,
 			0,
-			"Systracker debug exception");
+			"synchronous external abort");
 
 	/* for 64bit, we should register async abort handler */
 	ret = register_async_abort_handler(write_timeout_handler, NULL);
