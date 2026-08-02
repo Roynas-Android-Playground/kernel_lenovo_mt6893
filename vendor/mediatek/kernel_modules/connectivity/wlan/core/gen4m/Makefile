@@ -475,7 +475,9 @@ else
 ccflags-y += -DCFG_SUPPORT_NAN=0
 endif
 
-ifeq ($(MODULE_NAME),)
+ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
+	MODULE_NAME := wlan_drv_gen4m
+else ifeq ($(MODULE_NAME),)
 	MODULE_NAME := wlan_$(shell echo $(strip $(WLAN_CHIP_ID)) | tr A-Z a-z)_$(CONFIG_MTK_COMBO_WIFI_HIF)
 endif
 
@@ -530,18 +532,16 @@ ifneq ($(PLATFORM_FLAGS), )
     ccflags-y += $(PLATFORM_FLAGS)
 endif
 
-ifeq ($(CONFIG_MTK_WIFI_ONLY),$(filter $(CONFIG_MTK_WIFI_ONLY),m y))
-obj-$(CONFIG_MTK_WIFI_ONLY) += $(MODULE_NAME).o
-else
-obj-$(CONFIG_MTK_COMBO_WIFI) += $(MODULE_NAME).o
-#obj-y += $(MODULE_NAME).o
-endif
-
 ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
 $(warning $(MODULE_NAME) build-in boot.img)
 obj-y += $(MODULE_NAME).o
 ccflags-y += -DCONFIG_WLAN_DRV_BUILD_IN=1
 else
+ifeq ($(CONFIG_MTK_WIFI_ONLY),$(filter $(CONFIG_MTK_WIFI_ONLY),m y))
+obj-$(CONFIG_MTK_WIFI_ONLY) += $(MODULE_NAME).o
+else
+obj-$(CONFIG_MTK_COMBO_WIFI) += $(MODULE_NAME).o
+endif
 $(warning $(MODULE_NAME) is kernel module)
 obj-m += $(MODULE_NAME).o
 ccflags-y += -DCONFIG_WLAN_DRV_BUILD_IN=0

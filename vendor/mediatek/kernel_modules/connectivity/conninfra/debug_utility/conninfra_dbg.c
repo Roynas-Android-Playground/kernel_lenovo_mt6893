@@ -38,7 +38,7 @@
 static struct proc_dir_entry *g_conninfra_dbg_entry;
 
 #if CONNINFRA_DBG_SUPPORT
-static ssize_t conninfra_dbg_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
+ssize_t conninfra_dbg_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
 
 static int conninfra_dbg_hwver_get(int par1, int par2, int par3);
 

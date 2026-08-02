@@ -18,7 +18,8 @@ full-history Git subtrees instead of being left as unavailable external paths.
 - ARM64 KGDB hardware-breakpoint and concurrency support.
 - Opt-in early memory tests, MediaTek hardware diagnostics, and cache-parity/RAS
   instrumentation and containment.
-- MT6893 conninfra, WLAN gen4m/adaptor, Bluetooth, FM and GPS source trees.
+- MT6893 conninfra, connfem, WLAN gen4m/adaptor, Bluetooth, FM and GPS source
+  trees, selected as built-ins by both TB132FU defconfigs.
 
 Generated vendor `out/` files, prebuilt kernels and stale artifact hashes are
 not included. Potentially unsafe diagnostic behavior remains opt-in through the
@@ -42,8 +43,23 @@ ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
   out/.config arch/arm64/configs/p11_pro_2gen_kgdb.config
 ```
 
-A complete kernel build requires a compatible Android ARM64/Clang toolchain and
-the normal TB132FU device-tree inputs.
+This 4.14 Makefile predates modern LLVM defaults and needs the compiler tools
+spelled out.  With the Android Clang archive extracted as `toolchain/`, use GNU
+`aarch64-linux-gnu-as` for kernel assembly (`llvm-as` assembles LLVM IR, not
+AArch64 `.S` files):
+
+```sh
+TOOLCHAIN=/absolute/path/to/toolchain
+PATH="$TOOLCHAIN/bin:$PATH" make -j8 O=out ARCH=arm64 \
+  CC=clang AS=aarch64-linux-gnu-as LD=ld.lld \
+  AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
+  STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- \
+  CLANG_TRIPLE=aarch64-linux-gnu- \
+  CLANG_FLAGS='--target=aarch64-linux-gnu --prefix=/usr/bin/aarch64-linux-gnu- --gcc-toolchain=/usr -no-integrated-as' \
+  KERNEL_OUT="$PWD/out" TARGET_BUILD_VARIANT=userdebug
+```
+
+A complete kernel build also requires the normal TB132FU device-tree inputs.
 
 ## History layout
 
@@ -80,8 +96,9 @@ resolved build config from `build-provenance/` were intentionally not copied.
 
 ## Connectivity subtrees
 
-Every component uses Motorola release tag `MMI-STA32.79-13-2` and is merged
-with its complete source history, without `--squash`.
+The components from the Motorola kernel release use tag `MMI-STA32.79-13-2`.
+Connfem comes from Motorola's `android-12-release-sst` branch.  Every component
+is merged with its complete source history, without `--squash`.
 
 | Prefix | Repository | Release commit |
 | --- | --- | --- |
@@ -92,6 +109,7 @@ with its complete source history, without `--squash`.
 | `vendor/mediatek/kernel_modules/connectivity/fmradio` | `MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-fmradio` | `f156d6961eee5aa7d5456d0c21f5c51049312d0e` |
 | `vendor/mediatek/kernel_modules/connectivity/gps` | `MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-gps` | `57544242053e4b4ed06d5337ce34e947dcc4bfee` |
 | `vendor/mediatek/kernel_modules/connectivity/common` | `MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-common` | `e74b68caf1a2be3463c2a5068df06c5779fed074` |
+| `vendor/mediatek/kernel_modules/connectivity/connfem` | `MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-connfem` | `a0b2549be29f5cf4f3f212da2baa9523ab64698f` |
 
 `drivers/misc/mediatek/connectivity/Makefile` prefers these in-tree sources and
 falls back to MediaTek's original Android layout where `vendor/` is beside the

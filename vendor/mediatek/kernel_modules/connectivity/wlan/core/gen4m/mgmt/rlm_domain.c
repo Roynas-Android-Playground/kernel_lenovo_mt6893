@@ -5775,7 +5775,8 @@ void txPwrCtrlGlobalVariableToList(struct ADAPTER *prAdapter)
 }
 
 // alex add
-static bool hardware_version_mp(){
+static bool hardware_version_mp(void)
+{
 	const char *version = NULL;
 	int phase = 0;
 
@@ -6993,5 +6994,4 @@ void rlmDomainAssert(u_int8_t cond)
 	}
 
 }
-
 

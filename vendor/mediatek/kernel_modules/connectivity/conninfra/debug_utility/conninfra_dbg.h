@@ -12,6 +12,7 @@ int conninfra_dev_dbg_init(void);
 int conninfra_dev_dbg_deinit(void);
 
 #if CONNINFRA_DBG_SUPPORT
+ssize_t conninfra_dbg_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
 ssize_t conninfra_dbg_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos);
 #endif
 

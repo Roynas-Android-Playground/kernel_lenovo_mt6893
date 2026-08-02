@@ -4087,7 +4087,7 @@ static int main_exit(void)
  * Kernel Module init/exit Functions
  */
 
-int __init main_driver_init(void)
+int main_driver_init(void)
 {
 	int ret = 0;
 	int i;
@@ -4123,7 +4123,7 @@ int __init main_driver_init(void)
 	return ret;
 }
 
-void __exit main_driver_exit(void)
+void main_driver_exit(void)
 {
 	BTMTK_INFO("%s", __func__);
 
@@ -4136,8 +4136,10 @@ void __exit main_driver_exit(void)
 	main_exit();
 }
 
+#ifndef MTK_WCN_REMOVE_KERNEL_MODULE
 module_init(main_driver_init);
 module_exit(main_driver_exit);
+#endif
 
 /**
  * Module Common Information

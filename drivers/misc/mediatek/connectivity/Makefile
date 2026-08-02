@@ -44,9 +44,6 @@ endif
     $(MODULE_NAME)-objs += power_throttling/test.o
 
 
-    # Do build-in for Makefile checking
-    # export CONFIG_WLAN_DRV_BUILD_IN=y
-
     ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
         $(info $$CONFIG_MTK_COMBO_CHIP is [${CONFIG_MTK_COMBO_CHIP}])
         MTK_PLATFORM_ID := $(patsubst CONSYS_%,%,$(subst ",,$(CONFIG_MTK_COMBO_CHIP)))
@@ -79,6 +76,10 @@ endif
 
         PATH_TO_WLAN_CHR_DRV = vendor/mediatek/kernel_modules/connectivity/wlan/adaptor
         PATH_TO_WLAN_DRV     = vendor/mediatek/kernel_modules/connectivity/wlan/core/gen4m
+        PATH_TO_CONNFEM_DRV  = vendor/mediatek/kernel_modules/connectivity/connfem
+        PATH_TO_BT_DRV       = vendor/mediatek/kernel_modules/connectivity/bt/mt66xx/btif
+        PATH_TO_FMRADIO_DRV  = vendor/mediatek/kernel_modules/connectivity/fmradio
+        PATH_TO_GPS_DRV      = vendor/mediatek/kernel_modules/connectivity/gps
 
         # Prefer the versioned in-tree subtrees, while retaining support for
         # MediaTek's original Android layout with vendor/ beside the kernel.
@@ -87,12 +88,17 @@ endif
         else
             CONNECTIVITY_ROOT := $(srctree)/..
         endif
+        export TOP := $(CONNECTIVITY_ROOT)
 
         ABS_PATH_TO_WMT_DRV      = $(CONNECTIVITY_ROOT)/$(PATH_TO_WMT_DRV)
         ABS_PATH_TO_WLAN_CHR_DRV = $(CONNECTIVITY_ROOT)/$(PATH_TO_WLAN_CHR_DRV)
         ABS_PATH_TO_WLAN_DRV     = $(CONNECTIVITY_ROOT)/$(PATH_TO_WLAN_DRV)
+        ABS_PATH_TO_CONNFEM_DRV  = $(CONNECTIVITY_ROOT)/$(PATH_TO_CONNFEM_DRV)
+        ABS_PATH_TO_BT_DRV       = $(CONNECTIVITY_ROOT)/$(PATH_TO_BT_DRV)
+        ABS_PATH_TO_FMRADIO_DRV  = $(CONNECTIVITY_ROOT)/$(PATH_TO_FMRADIO_DRV)
+        ABS_PATH_TO_GPS_DRV      = $(CONNECTIVITY_ROOT)/$(PATH_TO_GPS_DRV)
 
-        # check wlan driver folder
+        # Check every source tree required by the built-in stack.
         ifeq (,$(wildcard $(ABS_PATH_TO_WMT_DRV)))
             $(error $(ABS_PATH_TO_WMT_DRV) is not existed)
         endif
@@ -102,24 +108,50 @@ endif
         ifeq (,$(wildcard $(ABS_PATH_TO_WLAN_DRV)))
             $(error $(ABS_PATH_TO_WLAN_DRV) is not existed)
         endif
+        ifeq (,$(wildcard $(ABS_PATH_TO_CONNFEM_DRV)))
+            $(error $(ABS_PATH_TO_CONNFEM_DRV) is not existed)
+        endif
+        ifeq (,$(wildcard $(ABS_PATH_TO_BT_DRV)))
+            $(error $(ABS_PATH_TO_BT_DRV) is not existed)
+        endif
+        ifeq (,$(wildcard $(ABS_PATH_TO_FMRADIO_DRV)))
+            $(error $(ABS_PATH_TO_FMRADIO_DRV) is not existed)
+        endif
+        ifeq (,$(wildcard $(ABS_PATH_TO_GPS_DRV)))
+            $(error $(ABS_PATH_TO_GPS_DRV) is not existed)
+        endif
 
-        $(warning symbolic link to $(PATH_TO_WMT_DRV))
-        $(warning symbolic link to $(PATH_TO_WLAN_CHR_DRV))
-        $(warning symbolic link to $(PATH_TO_WLAN_DRV))
+        # Kbuild cannot descend into a source directory outside this one, so
+        # expose each versioned subtree through a local symlink.  Keep an
+        # already-correct link intact: recursive/parallel make invocations
+        # otherwise race while repeatedly unlinking and recreating it.
+        define ensure-connectivity-link
+        $(if $(shell \
+            if [ ! -e "$(1)" ] && [ ! -L "$(1)" ]; then \
+                ln -s "$(2)" "$(1)" 2>/dev/null || true; \
+            fi; \
+            [ "$$(readlink -f "$(1)")" = "$$(readlink -f "$(2)")" ] || echo error), \
+            $(error $(1) does not resolve to $(2)))
+        endef
 
-        $(shell unlink $(srctree)/$(src)/wmt_drv)
-        $(shell unlink $(srctree)/$(src)/wmt_chrdev_wifi)
-        $(shell unlink $(srctree)/$(src)/wlan_drv_gen4m)
-
-        $(shell ln -s $(ABS_PATH_TO_WMT_DRV)      $(srctree)/$(src)/wmt_drv)
-        $(shell ln -s $(ABS_PATH_TO_WLAN_CHR_DRV) $(srctree)/$(src)/wmt_chrdev_wifi)
-        $(shell ln -s $(ABS_PATH_TO_WLAN_DRV)     $(srctree)/$(src)/wlan_drv_gen4m)
+        $(call ensure-connectivity-link,$(srctree)/$(src)/wmt_drv,$(ABS_PATH_TO_WMT_DRV))
+        $(call ensure-connectivity-link,$(srctree)/$(src)/wmt_chrdev_wifi,$(ABS_PATH_TO_WLAN_CHR_DRV))
+        $(call ensure-connectivity-link,$(srctree)/$(src)/wlan_drv_gen4m,$(ABS_PATH_TO_WLAN_DRV))
+        $(call ensure-connectivity-link,$(srctree)/$(src)/connfem,$(ABS_PATH_TO_CONNFEM_DRV))
+        $(call ensure-connectivity-link,$(srctree)/$(src)/bt,$(ABS_PATH_TO_BT_DRV))
+        $(call ensure-connectivity-link,$(srctree)/$(src)/fmradio,$(ABS_PATH_TO_FMRADIO_DRV))
+        $(call ensure-connectivity-link,$(srctree)/$(src)/gps_drv,$(ABS_PATH_TO_GPS_DRV))
 
         # for gen4m options
         export CONFIG_MTK_COMBO_WIFI_HIF=axi
         export WLAN_CHIP_ID=$(MTK_PLATFORM_ID)
         export MTK_ANDROID_WMT=y
         export MTK_ANDROID_EMI=y
+        export MTK_WLAN_SERVICE=yes
+        export _MTK_BT_CHIP=MTK_CONSYS_MT6893
+        export CFG_BUILD_CONNAC2=true
+        export CFG_FM_CHIP_ID=$(MTK_PLATFORM_ID)
+        export CFG_FM_CHIP=mt6635
 
         WLAN_IP_SET_1_SERIES := 6765 6761 6885 6893
         WLAN_IP_SET_2_SERIES := 3967 6785
@@ -135,67 +167,20 @@ endif
             export WIFI_IP_SET=1
         endif
 
-        # Do build-in for xxx.c checking
+        # Keep providers ahead of their consumers in vmlinux initcall order.
         subdir-ccflags-y += -D MTK_WCN_REMOVE_KERNEL_MODULE
         subdir-ccflags-y += -D MTK_WCN_BUILT_IN_DRIVER
+        # Modern Clang diagnoses legacy vendor bookkeeping variables throughout
+        # these imported drivers.  Preserve the warning but do not let the
+        # vendor-wide -Werror turn it into a build failure.
+        subdir-ccflags-y += $(call cc-option,-Wno-error=unused-but-set-variable)
+        obj-y += connfem/
         obj-y += wmt_drv/
         obj-y += wmt_chrdev_wifi/
         obj-y += wlan_drv_gen4m/
-
-        # For BT built-in mode start @{
-        # ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6885"))
-        #     PATH_TO_BT_DRV       = vendor/mediatek/kernel_modules/connectivity/bt/mt66xx/btif
-        #     export _MTK_BT_CHIP=MTK_CONSYS_MT6885
-        # else ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6893"))
-        #     PATH_TO_BT_DRV       = vendor/mediatek/kernel_modules/connectivity/bt/mt66xx/btif
-        #     export _MTK_BT_CHIP=MTK_CONSYS_MT6893
-        # else ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6877"))
-        #     PATH_TO_BT_DRV       = vendor/mediatek/kernel_modules/connectivity/bt/mt66xx/btif
-        #     export _MTK_BT_CHIP=MTK_CONSYS_MT6877
-        # else
-        #     PATH_TO_BT_DRV       = vendor/mediatek/kernel_modules/connectivity/bt/mt66xx/wmt
-        # endif
-        # ABS_PATH_TO_BT_DRV       = $(CONNECTIVITY_ROOT)/$(PATH_TO_BT_DRV)
-        # $(shell unlink $(srctree)/$(src)/bt)
-        # $(shell ln -s $(ABS_PATH_TO_BT_DRV)      $(srctree)/$(src)/bt)
-        # obj-y += bt/
-        # @} For BT built-in mode end
-
-
-        # For FM built-in mode start @{
-        # for fmradio options
-        # ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6885" "CONSYS_6893" "CONSYS_6877"))
-        #     export CFG_BUILD_CONNAC2=true
-        # else
-        #     export CFG_BUILD_CONNAC2=false
-        # endif
-        # FM_6631_CHIPS := 6758 6759 6771 6775 6765 6761 3967 6797 6768 6785 8168
-        # FM_6635_CHIPS := 6779 6885 6873 6893 6877
-        # ifneq ($(filter $(FM_6631_CHIPS), $(MTK_PLATFORM_ID)),)
-        #     FM_CHIP := mt6631
-        # else ifneq ($(filter $(FM_6635_CHIPS), $(MTK_PLATFORM_ID)),)
-        #     FM_CHIP := mt6635
-        # endif
-        # export CFG_FM_CHIP_ID=$(MTK_PLATFORM_ID)
-        # export CFG_FM_CHIP=$(FM_CHIP)
-        # PATH_TO_FMRADIO_DRV       = vendor/mediatek/kernel_modules/connectivity/fmradio
-        # ABS_PATH_TO_FMRADIO_DRV  = $(CONNECTIVITY_ROOT)/$(PATH_TO_FMRADIO_DRV)
-        # $(shell unlink $(srctree)/$(src)/fmradio)
-        # $(shell ln -s $(ABS_PATH_TO_FMRADIO_DRV)      $(srctree)/$(src)/fmradio)
-        # obj-y += fmradio/
-        # @} For FM built-in mode end
-
-        # For GPS built-in mode start @{
-        # PATH_TO_GPS_DRV      = vendor/mediatek/kernel_modules/connectivity/gps
-        # ABS_PATH_TO_GPS_DRV      = $(CONNECTIVITY_ROOT)/$(PATH_TO_GPS_DRV)
-        # ifeq (,$(wildcard $(ABS_PATH_TO_GPS_DRV)))
-        #     $(error $(ABS_PATH_TO_GPS_DRV) is not existed)
-        # endif
-        # $(warning symbolic link to $(PATH_TO_GPS_DRV))
-        # $(shell unlink $(srctree)/$(src)/gps_drv)
-        # $(shell ln -s $(ABS_PATH_TO_GPS_DRV)      $(srctree)/$(src)/gps_drv)
-        # obj-y += gps_drv/
-        # @} For GPS built-in mode end
+        obj-y += bt/
+        obj-y += fmradio/
+        obj-y += gps_drv/
 
     endif
 

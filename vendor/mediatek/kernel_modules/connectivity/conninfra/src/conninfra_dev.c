@@ -185,7 +185,8 @@ struct wmt_platform_bridge g_plat_bridge = {
 	.conninfra_reg_is_bus_hang_cb = conninfra_conn_is_bus_hang,
 #endif
 #if CONNINFRA_DBG_SUPPORT
-	.debug_cb = conninfra_dbg_write,
+	.debug_write_cb = conninfra_dbg_write,
+	.debug_read_cb = conninfra_dbg_read,
 #endif
 };
 
@@ -613,7 +614,7 @@ static void conninfra_register_pmic_callback(void)
 
 
 /************************************************************************/
-static int conninfra_dev_do_drv_init()
+static int conninfra_dev_do_drv_init(void)
 {
 	static int init_done = 0;
 	int iret = 0;
@@ -804,4 +805,3 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Willy.Yu @ CTD/SE5/CS5");
 
 module_param(gConnInfraMajor, uint, 0644);
-
