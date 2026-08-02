@@ -14,6 +14,8 @@
 
 #include <linux/printk.h>
 #include <linux/bug.h>
+#include <linux/debug_locks.h>
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
@@ -62,11 +64,15 @@ static DEFINE_SPINLOCK(cache_parity_status_lock);
 #define CACHE_PARITY_EVENT_DEPTH	32
 #define CACHE_PARITY_REPORT_BATCH	CACHE_PARITY_EVENT_DEPTH
 #define CACHE_PARITY_DRAIN_LIMIT	4
+#define CACHE_PARITY_SNAPSHOT_DEPTH	(CACHE_PARITY_DRAIN_LIMIT + 3)
 #define CACHE_PARITY_SPURIOUS_LIMIT	3
 #define CACHE_PARITY_CE_WINDOW		HZ
 #define CACHE_PARITY_CE_LIMIT		(ECC_IRQ_TRIGGER_THRESHOLD + 1)
 #define CACHE_PARITY_CFI_STUCK_LIMIT	3
 #define CACHE_PARITY_QUARANTINE_DELAY	HZ
+#define CACHE_PARITY_IRQ_ACTIVE		0
+#define CACHE_PARITY_IRQ_QUARANTINED	1
+#define CACHE_PARITY_IRQ_PERMANENT	2
 #define CACHE_PARITY_ACTION_DRAIN_LIMIT	BIT(0)
 #define CACHE_PARITY_ACTION_CFI_DISABLED	BIT(1)
 #define CACHE_PARITY_ACTION_IRQ_QUARANTINED	BIT(2)
@@ -74,6 +80,8 @@ static DEFINE_SPINLOCK(cache_parity_status_lock);
 #define CACHE_PARITY_ACTION_ERRATUM	BIT(4)
 #define CACHE_PARITY_ACTION_CE_BURST	BIT(5)
 #define CACHE_PARITY_ACTION_CFI_STUCK	BIT(6)
+#define CACHE_PARITY_ACTION_BOOT_CONTAINED	BIT(7)
+#define CACHE_PARITY_ACTION_CTLR_MASK_FAILED	BIT(8)
 #define ERXSTATUS_AV_BIT		BIT_ULL(31)
 #define ERXSTATUS_V_BIT		BIT_ULL(30)
 #define ERXSTATUS_ER_BIT		BIT_ULL(28)
@@ -89,6 +97,8 @@ static DEFINE_SPINLOCK(cache_parity_status_lock);
 #define ERXCTLR_CFI_BIT		BIT_ULL(8)
 #define ERXCTLR_WCFI_BIT		BIT_ULL(9)
 #define ERXCTLR_FATAL_MASK	(BIT_ULL(3) | BIT_ULL(2) | BIT_ULL(0))
+/* RAS v1 error-detection/response enables; bit 1 is IMPLEMENTATION DEFINED. */
+#define ERXCTLR_CONTAINMENT_MASK	(BIT_ULL(0) | GENMASK_ULL(11, 2))
 #define ERXSTATUS_SINGLE_W1C_MASK	(ERXSTATUS_AV_BIT | ERXSTATUS_V_BIT | \
 				 ECC_UE_BIT | ERXSTATUS_ER_BIT | \
 				 ERXSTATUS_OF_BIT | ERXSTATUS_MV_BIT | \
@@ -98,12 +108,12 @@ static DEFINE_SPINLOCK(cache_parity_status_lock);
 struct cache_parity_event_v2 {
 	int irq;
 	u32 hwirq;
-	u32 cpu;
+	u32 handler_cpu;
 	u32 source_count;
 	u32 window_count;
 	u32 suppressed;
 	u32 actions;
-	u32 midr;
+	u32 handler_midr;
 	u64 misc0_el1;
 	u64 addr_el1;
 	u64 status_el1;
@@ -111,6 +121,7 @@ struct cache_parity_event_v2 {
 	u64 erxfr_el1;
 	u64 ctlr_before;
 	u64 ctlr_after;
+	u64 residual_status_el1;
 };
 
 struct cache_parity_irq_data {
@@ -139,6 +150,24 @@ struct cache_parity_v2_data {
 };
 
 static int cache_parity_cpuhp_state = -1;
+static bool cache_parity_boot_contain;
+
+/* Explicit recovery mode trades diagnostics and integrity for bootability. */
+static int __init cache_parity_boot_contain_setup(char *str)
+{
+	bool enable;
+	int ret = kstrtobool(str, &enable);
+
+	if (ret || !enable)
+		return ret;
+
+	cache_parity_boot_contain = true;
+	__debug_locks_off();
+	return 0;
+}
+
+early_param("cache_parity.boot_contain",
+	    cache_parity_boot_contain_setup);
 
 static struct {
 	struct work_struct work;
@@ -473,21 +502,55 @@ static enum cache_parity_cfi_result cache_parity_disable_cfi(
 	return CACHE_PARITY_CFI_NEWLY_DISABLED;
 }
 
+static u64 cache_parity_mask_error_source_v2(void)
+{
+	u64 ctlr = read_ERXCTLR_EL1();
+
+	write_ERXCTLR_EL1(ctlr & ~ERXCTLR_CONTAINMENT_MASK);
+	dsb(sy);
+	isb();
+
+	return read_ERXCTLR_EL1();
+}
+
 static void cache_parity_reenable_source_irq(struct work_struct *work)
 {
 	struct cache_parity_irq_data *irq_data = container_of(
 		to_delayed_work(work), struct cache_parity_irq_data,
 		reenable_work);
 
-	if (atomic_cmpxchg(&irq_data->irq_quarantined, 1, 0) == 1)
+	if (atomic_cmpxchg(&irq_data->irq_quarantined,
+			   CACHE_PARITY_IRQ_QUARANTINED,
+			   CACHE_PARITY_IRQ_ACTIVE) ==
+	    CACHE_PARITY_IRQ_QUARANTINED)
 		enable_irq(irq_data->irq);
 }
 
 static bool cache_parity_quarantine_source_irq(
-	int irq, struct cache_parity_irq_data *irq_data)
+	int irq, struct cache_parity_irq_data *irq_data, bool permanent)
 {
-	if (!irq_data ||
-	    atomic_cmpxchg(&irq_data->irq_quarantined, 0, 1))
+	int old;
+
+	if (!irq_data)
+		return false;
+
+	if (permanent) {
+		old = atomic_xchg(&irq_data->irq_quarantined,
+				 CACHE_PARITY_IRQ_PERMANENT);
+		if (old == CACHE_PARITY_IRQ_PERMANENT)
+			return false;
+		if (old == CACHE_PARITY_IRQ_QUARANTINED) {
+			cancel_delayed_work(&irq_data->reenable_work);
+			return true;
+		}
+		disable_irq_nosync(irq);
+		return true;
+	}
+
+	if (atomic_cmpxchg(&irq_data->irq_quarantined,
+			   CACHE_PARITY_IRQ_ACTIVE,
+			   CACHE_PARITY_IRQ_QUARANTINED) !=
+	    CACHE_PARITY_IRQ_ACTIVE)
 		return false;
 
 	disable_irq_nosync(irq);
@@ -514,6 +577,11 @@ static const char *cache_parity_event_type(u64 status_el1)
 	default:
 		return "NA";
 	}
+}
+
+static const char *cache_parity_source_scope(u32 hwirq)
+{
+	return hwirq == FAULTIRQ_START ? "dsu-shared" : "pe-local";
 }
 
 static bool cache_parity_dequeue_v2(struct cache_parity_event_v2 *event,
@@ -586,45 +654,68 @@ static void handle_error_v2(struct work_struct *w)
 		dropped_total += dropped;
 
 		if (severity >= 3) {
-			ECC_LOG("ecc event(%s), cpu:%u, irq:%d, hwirq:%u, "
-				 "source_count:%u, actions:0x%x, time_ns:%llu, "
-				 "misc0_el1:0x%016llx, "
-				 "addr_el1:0x%016llx, status_el1:0x%016llx\n",
+			ECC_LOG("ecc event(%s), handler_cpu:%u, irq:%d, "
+				 "hwirq:%u, scope:%s, source_count:%u, "
+				 "actions:0x%x, time_ns:%llu\n",
 				 cache_parity_event_type(event.status_el1),
-				 event.cpu, event.irq, event.hwirq,
+				 event.handler_cpu, event.irq, event.hwirq,
+				 cache_parity_source_scope(event.hwirq),
 				 event.source_count, event.actions,
-				 (unsigned long long)event.timestamp,
+				 (unsigned long long)event.timestamp);
+			ECC_LOG("ecc record, misc_valid:%u, "
+				 "misc0_el1:0x%016llx, addr_valid:%u, "
+				 "addr_el1:0x%016llx, "
+				 "status_el1:0x%016llx, residual:0x%016llx\n",
+				 (unsigned int)!!(event.status_el1 &
+						  ERXSTATUS_MV_BIT),
 				 (unsigned long long)event.misc0_el1,
+				 (unsigned int)!!(event.status_el1 &
+						  ERXSTATUS_AV_BIT),
 				 (unsigned long long)event.addr_el1,
-				 (unsigned long long)event.status_el1);
-			pr_notice("ecc controls, midr:%08x, erxfr:%016llx, "
-				  "ctlr:%016llx->%016llx\n",
-				  event.midr,
+				 (unsigned long long)event.status_el1,
+				 (unsigned long long)event.residual_status_el1);
+			pr_notice("ecc controls, handler_midr:%08x, "
+				  "erxfr:%016llx, "
+				  "ctlr:%016llx->%016llx, mask_failed:%u\n",
+				  event.handler_midr,
 				  (unsigned long long)event.erxfr_el1,
 				  (unsigned long long)event.ctlr_before,
-				  (unsigned long long)event.ctlr_after);
+				  (unsigned long long)event.ctlr_after,
+				  (unsigned int)!!(event.actions &
+						   CACHE_PARITY_ACTION_CTLR_MASK_FAILED));
 			report_event = event;
 			report_severity = severity;
 		} else {
 			/* CE admission is bounded per source; avoid AEE/SRAM here. */
-			pr_notice("ecc event(%s), cpu:%u, irq:%d, hwirq:%u, "
-				  "source:%u, window:%u, suppressed:%u, "
-				  "actions:0x%x, time_ns:%llu, midr:%08x, "
-				  "misc:%016llx, addr:%016llx, "
-				  "status:%016llx, erxfr:%016llx, "
-				  "ctlr:%016llx->%016llx\n",
+			pr_notice("ecc event(%s), handler_cpu:%u, irq:%d, "
+				  "hwirq:%u, scope:%s, source:%u, window:%u, "
+				  "suppressed:%u, actions:0x%x, time_ns:%llu, "
+				  "handler_midr:%08x, "
+				  "misc_valid:%u, misc:%016llx, "
+				  "addr_valid:%u, addr:%016llx, "
+				  "status:%016llx, residual:%016llx, "
+				  "erxfr:%016llx, "
+				  "ctlr:%016llx->%016llx, mask_failed:%u\n",
 				  cache_parity_event_type(event.status_el1),
-				  event.cpu, event.irq, event.hwirq,
+				  event.handler_cpu, event.irq, event.hwirq,
+				  cache_parity_source_scope(event.hwirq),
 				  event.source_count, event.window_count,
 				  event.suppressed, event.actions,
 				  (unsigned long long)event.timestamp,
-				  event.midr,
+				  event.handler_midr,
+				  (unsigned int)!!(event.status_el1 &
+						   ERXSTATUS_MV_BIT),
 				  (unsigned long long)event.misc0_el1,
+				  (unsigned int)!!(event.status_el1 &
+						   ERXSTATUS_AV_BIT),
 				  (unsigned long long)event.addr_el1,
 				  (unsigned long long)event.status_el1,
+				  (unsigned long long)event.residual_status_el1,
 				  (unsigned long long)event.erxfr_el1,
 				  (unsigned long long)event.ctlr_before,
-				  (unsigned long long)event.ctlr_after);
+				  (unsigned long long)event.ctlr_after,
+				  (unsigned int)!!(event.actions &
+						   CACHE_PARITY_ACTION_CTLR_MASK_FAILED));
 		}
 
 		/* Do not hold a fatal report behind a batch of corrected errors. */
@@ -637,21 +728,35 @@ static void handle_error_v2(struct work_struct *w)
 			  dropped_total);
 
 	if (report_severity >= 3) {
+		if (report_event.actions &
+		    CACHE_PARITY_ACTION_BOOT_CONTAINED) {
+			pr_notice("cache parity boot containment retained the fatal "
+				  "snapshot without platform/AEE dumps\n");
+			goto out;
+		}
+
 		/* Expensive platform/AEE reporting is reserved for DE and UE. */
 		ecc_dump_debug_info();
 		aee_kernel_exception("cache parity",
-			"ecc error(%s), cpu:%u, irq_index:%u, actions:0x%x, "
-			"misc0_el1:%016llx, addr_el1:%016llx, "
-			"status_el1:%016llx\n\n%s\n",
+			"ecc error(%s), handler_cpu:%u, hwirq:%u, actions:0x%x, "
+			"misc_valid:%u, misc0_el1:%016llx, "
+			"addr_valid:%u, addr_el1:%016llx, "
+			"status_el1:%016llx, residual:%016llx\n\n%s\n",
 			cache_parity_event_type(report_event.status_el1),
-			report_event.cpu, report_event.hwirq,
+			report_event.handler_cpu, report_event.hwirq,
 			report_event.actions,
+			(unsigned int)!!(report_event.status_el1 &
+					 ERXSTATUS_MV_BIT),
 			(unsigned long long)report_event.misc0_el1,
+			(unsigned int)!!(report_event.status_el1 &
+					 ERXSTATUS_AV_BIT),
 			(unsigned long long)report_event.addr_el1,
 			(unsigned long long)report_event.status_el1,
+			(unsigned long long)report_event.residual_status_el1,
 			"CRDISPATCH_KEY:Cache Parity Issue");
 	}
 
+out:
 	if (cache_parity_has_pending_v2())
 		schedule_work(&cache_parity_v2_queue.work);
 }
@@ -702,17 +807,16 @@ static void cache_parity_kick_v2(bool queued)
 }
 
 static void cache_parity_capture_v2(struct cache_parity_event_v2 *event,
-				    int irq, u32 hwirq,
-				    struct cache_parity_irq_data *irq_data,
-				    u64 status_el1, u32 actions)
+				    int irq, u32 hwirq, u64 status_el1,
+				    u32 actions)
 {
 	*event = (struct cache_parity_event_v2) {
 		.irq = irq,
 		.hwirq = hwirq,
-		.cpu = raw_smp_processor_id(),
+		.handler_cpu = raw_smp_processor_id(),
 		.actions = actions,
 		.status_el1 = status_el1,
-		.midr = read_cpuid_id(),
+		.handler_midr = read_cpuid_id(),
 	};
 
 	if (status_el1 & ERXSTATUS_MV_BIT)
@@ -722,7 +826,11 @@ static void cache_parity_capture_v2(struct cache_parity_event_v2 *event,
 	event->erxfr_el1 = read_ERXFR_EL1();
 	event->ctlr_before = read_ERXCTLR_EL1();
 	event->ctlr_after = event->ctlr_before;
+}
 
+static void cache_parity_account_v2(struct cache_parity_event_v2 *event,
+				    struct cache_parity_irq_data *irq_data)
+{
 	event->timestamp = local_clock();
 	if (irq_data)
 		event->source_count =
@@ -742,9 +850,9 @@ static u64 cache_parity_clear_record_v2(u64 status_el1)
 	return read_ERXSTATUS_EL1();
 }
 
-static u64 cache_parity_process_record_v2(
-	int irq, u32 hwirq, struct cache_parity_irq_data *irq_data,
-	u64 status_el1, u32 actions, bool *queued)
+static void cache_parity_process_event_v2(
+	const struct cache_parity_event_v2 *captured,
+	struct cache_parity_irq_data *irq_data, bool *queued)
 {
 #ifdef CONFIG_ARM64_ERRATUM_1800710
 	static const struct midr_range erratum_1800710_cpu_list[] = {
@@ -752,11 +860,11 @@ static u64 cache_parity_process_record_v2(
 		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A77),
 	};
 #endif
-	struct cache_parity_event_v2 event;
+	struct cache_parity_event_v2 event = *captured;
+	u64 status_el1 = event.status_el1;
 	bool admit = true;
 
-	cache_parity_capture_v2(&event, irq, hwirq, irq_data,
-				status_el1, actions);
+	cache_parity_account_v2(&event, irq_data);
 	if (cache_parity_corrected_only(status_el1)) {
 		enum cache_parity_ce_admit ce_admit;
 		enum cache_parity_cfi_result cfi_result;
@@ -772,9 +880,10 @@ static u64 cache_parity_process_record_v2(
 
 		policy_was_disabled = irq_data &&
 			atomic_read(&irq_data->cfi_policy_disabled);
-		if (contain ||
-		    event.window_count >= CACHE_PARITY_CE_LIMIT ||
-		    policy_was_disabled) {
+		if (!(event.actions & CACHE_PARITY_ACTION_BOOT_CONTAINED) &&
+		    (contain ||
+		     event.window_count >= CACHE_PARITY_CE_LIMIT ||
+		     policy_was_disabled)) {
 			cfi_result = cache_parity_disable_cfi(
 				event.erxfr_el1, event.ctlr_before,
 				&event.ctlr_after);
@@ -805,33 +914,46 @@ static u64 cache_parity_process_record_v2(
 		}
 	}
 #ifdef CONFIG_ARM64_ERRATUM_1800710
-	if (is_midr_in_range_list(event.midr, erratum_1800710_cpu_list) &&
+	if (is_midr_in_range_list(event.handler_midr,
+				  erratum_1800710_cpu_list) &&
 	    (status_el1 & ECC_CE_BIT) == (0x2ULL << 24) &&
 	    (status_el1 & ECC_SERR_BIT) == 0x2)
 		event.actions |= CACHE_PARITY_ACTION_ERRATUM;
 #endif
 	if (event.actions & CACHE_PARITY_ACTION_CFI_STUCK) {
-		if (cache_parity_quarantine_source_irq(irq, irq_data))
+		if (cache_parity_quarantine_source_irq(event.irq, irq_data,
+						     false))
 			event.actions |=
 				CACHE_PARITY_ACTION_IRQ_QUARANTINED;
 		if (irq_data)
 			atomic_set(&irq_data->cfi_containment_failures, 0);
 		admit = true;
 	}
+	if (event.actions & (CACHE_PARITY_ACTION_DRAIN_LIMIT |
+			     CACHE_PARITY_ACTION_IRQ_QUARANTINED |
+			     CACHE_PARITY_ACTION_BOOT_CONTAINED |
+			     CACHE_PARITY_ACTION_CTLR_MASK_FAILED))
+		admit = true;
 	if (admit && cache_parity_enqueue_v2(&event))
 		*queued = true;
-
-	/* Suppressed CE records still have to be returned to quiescent state. */
-	return cache_parity_clear_record_v2(status_el1);
 }
 
 static irqreturn_t default_parity_isr_v2(int irq, void *dev_id)
 {
 	struct cache_parity_irq_data *irq_data = dev_id;
+	struct cache_parity_event_v2 snapshots[CACHE_PARITY_SNAPSHOT_DEPTH];
 	u32 hwirq = irq_data ? irq_data->hwirq : virq_to_hwirq(irq);
 	u64 status_el1;
+	u64 containment_ctlr = 0;
+	u64 residual_status = 0;
 	unsigned int attempt;
+	unsigned int captured = 0;
 	u32 first_actions = 0;
+	int fatal_index = -1;
+	bool containment_attempted = false;
+	bool containment_mask_failed = false;
+	bool drain_exhausted = false;
+	bool quarantine = false;
 	bool queued = false;
 
 	/* ERRSELR is PE-local; record 1 is the cluster DSU record. */
@@ -848,14 +970,15 @@ static irqreturn_t default_parity_isr_v2(int irq, void *dev_id)
 				struct cache_parity_event_v2 event = {
 					.irq = irq,
 					.hwirq = hwirq,
-					.cpu = raw_smp_processor_id(),
+					.handler_cpu = raw_smp_processor_id(),
+					.handler_midr = read_cpuid_id(),
 					.source_count = spurious,
 					.actions = CACHE_PARITY_ACTION_SPURIOUS,
 					.timestamp = local_clock(),
 				};
 
 				if (cache_parity_quarantine_source_irq(
-						irq, irq_data))
+						irq, irq_data, false))
 					event.actions |=
 						CACHE_PARITY_ACTION_IRQ_QUARANTINED;
 				queued = cache_parity_enqueue_v2(&event);
@@ -873,47 +996,111 @@ static irqreturn_t default_parity_isr_v2(int irq, void *dev_id)
 		CACHE_PARITY_CFI_STUCK_LIMIT)
 		first_actions |= CACHE_PARITY_ACTION_CFI_STUCK;
 
-	for (attempt = 0;
-	     attempt < CACHE_PARITY_DRAIN_LIMIT &&
-		(status_el1 & ERXSTATUS_V_BIT);
-	     attempt++) {
-		status_el1 = cache_parity_process_record_v2(
-			irq, hwirq, irq_data, status_el1,
-			first_actions, &queued);
+	/*
+	 * Do not touch lockdep, queue locks, clocks, or AEE while a RAS record
+	 * remains asserted. Snapshot only PE-local registers and acknowledge each
+	 * record first; software accounting and reporting happen after the drain.
+	 */
+	while (captured < CACHE_PARITY_SNAPSHOT_DEPTH - 1 &&
+	       (status_el1 & ERXSTATUS_V_BIT)) {
+		u32 actions = first_actions;
+
+		if (captured >= CACHE_PARITY_DRAIN_LIMIT)
+			actions |= CACHE_PARITY_ACTION_DRAIN_LIMIT;
+		cache_parity_capture_v2(&snapshots[captured], irq, hwirq,
+					status_el1, actions);
+		if (fatal_index < 0 &&
+		    (status_el1 & (ECC_UE_BIT | ECC_DE_BIT))) {
+			fatal_index = captured;
+			if (cache_parity_boot_contain) {
+				/*
+				 * Stop a new fatal notification racing with the
+				 * W1C below. The snapshot already holds the
+				 * pre-mask controls and complete error record.
+				 */
+				containment_ctlr =
+					cache_parity_mask_error_source_v2();
+				containment_attempted = true;
+				containment_mask_failed =
+					containment_ctlr &
+					ERXCTLR_CONTAINMENT_MASK;
+				quarantine = true;
+			}
+		}
+
+		status_el1 = cache_parity_clear_record_v2(status_el1);
+		captured++;
 		first_actions = 0;
 	}
 
 	/*
 	 * A continuously replenished level IRQ must not monopolize hardirq
-	 * context. Preserve and acknowledge two more records. Corrected-only
-	 * records use CFI first; whole-source quarantine is bounded and used
-	 * only when corrected-fault containment does not stop the IRQ.
+	 * context. Reserve the final slot for a complete terminal record. In
+	 * recovery mode, mask a corrected-error storm before acknowledging it.
 	 */
-	for (attempt = 0; attempt < 2 && (status_el1 & ERXSTATUS_V_BIT);
-	     attempt++)
-		status_el1 = cache_parity_process_record_v2(
-			irq, hwirq, irq_data, status_el1,
-			CACHE_PARITY_ACTION_DRAIN_LIMIT, &queued);
-
 	if (status_el1 & ERXSTATUS_V_BIT) {
-		if (cache_parity_corrected_only(status_el1)) {
-			cache_parity_process_record_v2(
-				irq, hwirq, irq_data, status_el1,
-				CACHE_PARITY_ACTION_DRAIN_LIMIT, &queued);
-		} else {
-			struct cache_parity_event_v2 event;
-			u32 actions = CACHE_PARITY_ACTION_DRAIN_LIMIT;
+		u32 actions = first_actions |
+			CACHE_PARITY_ACTION_DRAIN_LIMIT;
 
-			cache_parity_capture_v2(&event, irq, hwirq, irq_data,
-						status_el1, actions);
-			/* Retry a persistent fatal or invalid record after quarantine. */
-			if (cache_parity_quarantine_source_irq(irq, irq_data))
-				event.actions |=
-					CACHE_PARITY_ACTION_IRQ_QUARANTINED;
-			if (cache_parity_enqueue_v2(&event))
-				queued = true;
+		drain_exhausted = true;
+		cache_parity_capture_v2(&snapshots[captured], irq, hwirq,
+					status_el1, actions);
+		if (fatal_index < 0 &&
+		    (status_el1 & (ECC_UE_BIT | ECC_DE_BIT)))
+			fatal_index = captured;
+		if (cache_parity_boot_contain && !containment_attempted) {
+			containment_ctlr = cache_parity_mask_error_source_v2();
+			containment_attempted = true;
+			containment_mask_failed = containment_ctlr &
+				ERXCTLR_CONTAINMENT_MASK;
+		}
+		status_el1 = cache_parity_clear_record_v2(status_el1);
+		captured++;
+		quarantine = true;
+	}
+
+	/*
+	 * Preserve the first post-drain status for diagnosis, then make one final
+	 * bounded W1C attempt before any queue, clock, printk, or AEE operation.
+	 */
+	if (quarantine) {
+		residual_status = status_el1;
+		if (status_el1 & ERXSTATUS_V_BIT)
+			status_el1 = cache_parity_clear_record_v2(status_el1);
+	}
+
+	if (quarantine && captured) {
+		unsigned int report = fatal_index >= 0 ?
+			fatal_index : captured - 1;
+
+		if (drain_exhausted)
+			snapshots[report].actions |=
+				CACHE_PARITY_ACTION_DRAIN_LIMIT;
+		if (cache_parity_quarantine_source_irq(irq, irq_data,
+						     containment_attempted) ||
+		    (irq_data && atomic_read(&irq_data->irq_quarantined)))
+			snapshots[report].actions |=
+				CACHE_PARITY_ACTION_IRQ_QUARANTINED;
+	}
+	if (quarantine) {
+		for (attempt = 0; attempt < captured; attempt++) {
+			snapshots[attempt].residual_status_el1 =
+				residual_status;
+			if (containment_attempted) {
+				snapshots[attempt].actions |=
+					CACHE_PARITY_ACTION_BOOT_CONTAINED;
+				snapshots[attempt].ctlr_after =
+					containment_ctlr;
+				if (containment_mask_failed)
+					snapshots[attempt].actions |=
+						CACHE_PARITY_ACTION_CTLR_MASK_FAILED;
+			}
 		}
 	}
+
+	for (attempt = 0; attempt < captured; attempt++)
+		cache_parity_process_event_v2(&snapshots[attempt], irq_data,
+					      &queued);
 
 	/* No worker can touch UART/AEE until all status writes are complete. */
 	cache_parity_kick_v2(queued);
@@ -1104,6 +1291,10 @@ static int cache_parity_probe_v2(struct platform_device *pdev)
 	int irq;
 
 	cache_parity_init_platform();
+	if (cache_parity_boot_contain)
+		dev_warn(&pdev->dev, "unsafe boot containment enabled; fatal or "
+			 "persistent RAS sources will be masked and quarantined "
+			 "after capture; lock debugging and AEE are disabled\n");
 
 	ret = of_property_read_u32(node, "err_level", &err_level);
 	if (ret)
@@ -1150,7 +1341,8 @@ static int cache_parity_probe_v2(struct platform_device *pdev)
 		}
 		atomic_set(&irq_data->error_count, 0);
 		atomic_set(&irq_data->spurious_count, 0);
-		atomic_set(&irq_data->irq_quarantined, 0);
+		atomic_set(&irq_data->irq_quarantined,
+			   CACHE_PARITY_IRQ_ACTIVE);
 		atomic_set(&irq_data->hotplug_disabled, 0);
 		atomic_set(&irq_data->cfi_policy_disabled, 0);
 		atomic_set(&irq_data->cfi_containment_failures, 0);

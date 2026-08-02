@@ -452,6 +452,19 @@
 
 	c101=		[NET] Moxa C101 synchronous serial card
 
+	cache_parity.boot_contain=
+			[ARM64,MTK] Format: <bool>
+			Enable emergency containment for the MediaTek v2
+			cache-parity/RAS driver from the early command line. This
+			disables global lock debugging at early boot. After a fatal
+			or non-draining RAS record, the driver attempts to disable
+			that selected record's detection/reporting controls,
+			permanently disables its IRQ, and suppresses the fatal
+			platform/AEE dump. This does not correct hardware or make
+			uncorrectable data safe and can permit silent corruption.
+			Use only for temporary recovery or data extraction.
+			Default: 0.
+
 	cachesize=	[BUGS=X86-32] Override level 2 CPU cache size detection.
 			Sometimes CPU hardware bugs make them report the cache
 			size incorrectly. The kernel will attempt work arounds
