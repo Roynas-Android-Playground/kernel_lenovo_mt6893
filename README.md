@@ -31,6 +31,9 @@ dedicated KGDB configuration and kernel command-line controls.
 - `p11_pro_2gen_kgdb_defconfig` — the watchdog-safe KGDB and diagnostic
   configuration used for Alex development.
 
+The tracked `localversion-alex` file gives all configurations the kernel release
+suffix `-alex`.
+
 For configuration-only validation:
 
 ```sh
