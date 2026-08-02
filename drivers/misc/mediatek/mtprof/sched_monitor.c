@@ -362,7 +362,12 @@ static int __init init_irq_count_tracer(void)
 	for (i = 0; i < REC_NUM; i++)
 		spin_lock_init(&irq_cpus[i].lock);
 
-	for_each_online_cpu(cpu)
+	/*
+	 * CPUs can be brought online after this initcall (for example after
+	 * booting with maxcpus=).  Initialize every possible CPU's callback
+	 * before the polling timer can queue work to a newly-online CPU.
+	 */
+	for_each_possible_cpu(cpu)
 		init_irq_work(per_cpu_ptr(&irq_count_data.work, cpu),
 			      irq_count_tracer_work);
 #ifdef CONFIG_MTK_ENG_BUILD
