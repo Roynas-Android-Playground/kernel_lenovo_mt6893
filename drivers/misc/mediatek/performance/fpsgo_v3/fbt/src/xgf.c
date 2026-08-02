@@ -1985,16 +1985,16 @@ error:
 static int xgf_enter_est_runtime(int rpid, struct xgf_render *render,
 	unsigned long long *runtime, unsigned long long ts)
 {
-	int ret;
+	typeof(xgf_est_runtime_fp) est_runtime_fp;
 
-	WARN_ON(!xgf_est_runtime_fp);
+	est_runtime_fp = READ_ONCE(xgf_est_runtime_fp);
+	if (unlikely(!est_runtime_fp)) {
+		pr_warn_once("FPSGO: XGF runtime estimator is unavailable\n");
+		*runtime = 0;
+		return -ENOENT;
+	}
 
-	if (xgf_est_runtime_fp)
-		ret = xgf_est_runtime_fp(rpid, render, runtime, ts);
-	else
-		ret = -ENOENT;
-
-	return ret;
+	return est_runtime_fp(rpid, render, runtime, ts);
 }
 
 static void xgf_get_runtime(pid_t tid, u64 *runtime)

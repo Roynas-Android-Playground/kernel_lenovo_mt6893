@@ -21,6 +21,7 @@
 #include <linux/platform_device.h>
 #include <linux/alarmtimer.h>
 #include <linux/suspend.h>
+#include <linux/workqueue.h>
 
 #include <mt-plat/charger_type.h>
 #include <mt-plat/mtk_battery.h>
@@ -55,6 +56,7 @@ struct shutdown_controller {
 	int batidx;
 	struct mutex lock;
 	struct notifier_block psy_nb;
+	struct work_struct psy_work;
 };
 
 static struct shutdown_controller sdc;
@@ -527,28 +529,38 @@ static int power_misc_routine_thread(void *arg)
 	return 0;
 }
 
-int mtk_power_misc_psy_event(
-	struct notifier_block *nb, unsigned long event, void *v)
+static void mtk_power_misc_psy_work(struct work_struct *work)
 {
-	struct power_supply *psy = v;
+	struct shutdown_controller *sdd = container_of(work,
+		struct shutdown_controller, psy_work);
+	struct power_supply *psy;
 	union power_supply_propval val;
 	int ret;
 	int tmp = 0;
 
-	if (strcmp(psy->desc->name, "battery") == 0) {
-		ret = psy->desc->get_property(
-			psy, POWER_SUPPLY_PROP_TEMP, &val);
-		if (!ret) {
-			tmp = val.intval / 10;
-			if (tmp >= BATTERY_SHUTDOWN_TEMPERATURE) {
-				bm_err(
-					"battery temperature >= %d,shutdown",
-					tmp);
+	psy = power_supply_get_by_name("battery");
+	if (!psy)
+		return;
 
-				wake_up_overheat(&sdc);
-			}
+	ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_TEMP, &val);
+	power_supply_put(psy);
+	if (!ret) {
+		tmp = val.intval / 10;
+		if (tmp >= BATTERY_SHUTDOWN_TEMPERATURE) {
+			bm_err("battery temperature >= %d,shutdown", tmp);
+			wake_up_overheat(sdd);
 		}
 	}
+}
+
+int mtk_power_misc_psy_event(
+	struct notifier_block *nb, unsigned long event, void *v)
+{
+	struct power_supply *psy = v;
+
+	if (event == PSY_EVENT_PROP_CHANGED && psy && psy->desc &&
+	    strcmp(psy->desc->name, "battery") == 0)
+		schedule_work(&sdc.psy_work);
 
 	return NOTIFY_DONE;
 }
@@ -559,6 +571,7 @@ void mtk_power_misc_init(struct platform_device *pdev)
 	alarm_init(&sdc.kthread_fgtimer, ALARM_BOOTTIME,
 		power_misc_kthread_fgtimer_func);
 	init_waitqueue_head(&sdc.wait_que);
+	INIT_WORK(&sdc.psy_work, mtk_power_misc_psy_work);
 
 	kthread_run(power_misc_routine_thread, &sdc, "power_misc_thread");
 
@@ -567,4 +580,3 @@ void mtk_power_misc_init(struct platform_device *pdev)
 	b_power_misc_init = true;
 	bm_err("%s INIT done, init:%d\n", __func__, b_power_misc_init);
 }
-

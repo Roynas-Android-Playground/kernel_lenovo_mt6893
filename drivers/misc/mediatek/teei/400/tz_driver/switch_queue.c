@@ -100,19 +100,31 @@ static int teei_bind_current_cpu(void)
 {
 	struct cpumask mask = { CPU_BITS_NONE };
 	int cpu_id = 0;
+	int ret;
 
-	/* Get current CPU ID */
-	cpu_id = smp_processor_id();
-
+	/*
+	 * Keep the selected CPU online until this thread is pinned and its
+	 * secure context follows it. Affinity changes can sleep, so preemption
+	 * must be enabled again before set_cpus_allowed_ptr().
+	 */
+	cpus_read_lock();
+	cpu_id = get_cpu();
 	cpumask_clear(&mask);
 	cpumask_set_cpu(cpu_id, &mask);
-	set_cpus_allowed_ptr(teei_switch_task, &mask);
+	put_cpu();
+
+	ret = set_cpus_allowed_ptr(current, &mask);
+	if (ret) {
+		cpus_read_unlock();
+		return ret;
+	}
 
 	if (last_cpu_id != cpu_id) {
 		teei_move_cpu_context(cpu_id, last_cpu_id);
 		last_cpu_id = cpu_id;
 	}
 
+	cpus_read_unlock();
 	return 0;
 }
 
@@ -204,7 +216,8 @@ int teei_switch_fn(void *work)
 		retVal = teei_bind_current_cpu();
 		if (retVal != 0) {
 			IMSG_ERROR("TEEI: Failed to bind current CPU!\n");
-			return retVal;
+			complete(&teei_switch_comp);
+			continue;
 		}
 #endif
 

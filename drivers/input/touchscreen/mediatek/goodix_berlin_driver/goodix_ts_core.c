@@ -772,8 +772,13 @@ static ssize_t goodix_ts_esd_info_store(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t count)
 {
+	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
+
 	if (!buf || count <= 0)
 		return -EINVAL;
+
+	if (!core_data->board_data.esd_enable)
+		return -EOPNOTSUPP;
 
 	if (buf[0] != '0')
 		goodix_ts_blocking_notify(NOTIFY_ESD_ON, NULL);
@@ -1306,6 +1311,12 @@ static int goodix_parse_dt(struct device_node *node,
 	if (board_data->pen_enable)
 		ts_info("goodix pen enabled");
 
+	/* ESD polling requires explicit board/firmware support. */
+	board_data->esd_enable =
+		of_property_read_bool(node, "goodix,esd-enable");
+	if (board_data->esd_enable)
+		ts_info("goodix esd enabled");
+
 	ts_debug("[DT]x:%d, y:%d, w:%d, p:%d", board_data->panel_max_x,
 		 board_data->panel_max_y, board_data->panel_max_w,
 		 board_data->panel_max_p);
@@ -1313,39 +1324,64 @@ static int goodix_parse_dt(struct device_node *node,
 }
 #endif
 
-/*add rotation function start*/
+/*
+ * panel_max_x/y are post-rotation Linux input bounds. For quarter turns,
+ * controller-native X is bounded by output Y and native Y by output X.
+ */
 #ifdef TPD_ROTATION_SUPPORT
-static void tpd_swap_xy(int *x, int *y)
+static void tpd_rotate_90(unsigned int *x, unsigned int *y,
+			  unsigned int out_max_x, unsigned int out_max_y)
 {
-	int temp = 0;
+	unsigned int old_x = min(*x, out_max_y);
 
-	temp = *x;
-	*x = *y;
-	*y = temp;
+	*x = min(*y, out_max_x);
+	*y = out_max_y - old_x;
 }
 
-static void tpd_rotate_90(int *x, int *y)
+static void tpd_rotate_180(unsigned int *x, unsigned int *y,
+			   unsigned int out_max_x, unsigned int out_max_y)
 {
-	*x = SCREEN_MAX_X + 1 - *x;
-
-	*x = (*x * SCREEN_MAX_Y) / SCREEN_MAX_X;
-	*y = (*y * SCREEN_MAX_X) / SCREEN_MAX_Y;
-
-	tpd_swap_xy(x, y);
+	*x = out_max_x - min(*x, out_max_x);
+	*y = out_max_y - min(*y, out_max_y);
 }
-static void tpd_rotate_180(int *x, int *y)
+
+static void tpd_rotate_270(unsigned int *x, unsigned int *y,
+			   unsigned int out_max_x, unsigned int out_max_y)
 {
-	*y = SCREEN_MAX_Y + 1 - *y;
-	*x = SCREEN_MAX_X + 1 - *x;
+	unsigned int old_x = min(*x, out_max_y);
+
+	*x = out_max_x - min(*y, out_max_x);
+	*y = old_x;
 }
-static void tpd_rotate_270(int *x, int *y)
+
+static void tpd_clamp(unsigned int *x, unsigned int *y,
+		      unsigned int out_max_x, unsigned int out_max_y)
 {
-	*y = SCREEN_MAX_Y + 1 - *y;
+	*x = min(*x, out_max_x);
+	*y = min(*y, out_max_y);
+}
 
-	*x = (*x * SCREEN_MAX_Y) / SCREEN_MAX_X;
-	*y = (*y * SCREEN_MAX_X) / SCREEN_MAX_Y;
+static void goodix_ts_rotate(struct input_dev *dev, unsigned int *x,
+			     unsigned int *y)
+{
+	struct goodix_ts_core *core_data = input_get_drvdata(dev);
+	const struct goodix_ts_board_data *ts_bdata = board_data(core_data);
 
-	tpd_swap_xy(x, y);
+	if (!ts_bdata)
+		return;
+
+	if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION, "90", 2) == 0)
+		tpd_rotate_90(x, y, ts_bdata->panel_max_x,
+			      ts_bdata->panel_max_y);
+	else if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION, "180", 3) == 0)
+		tpd_rotate_180(x, y, ts_bdata->panel_max_x,
+			       ts_bdata->panel_max_y);
+	else if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION, "270", 3) == 0)
+		tpd_rotate_270(x, y, ts_bdata->panel_max_x,
+			       ts_bdata->panel_max_y);
+	else
+		tpd_clamp(x, y, ts_bdata->panel_max_x,
+			  ts_bdata->panel_max_y);
 }
 #endif
 
@@ -1359,17 +1395,8 @@ static void goodix_ts_report_pen(struct input_dev *dev,
 	mutex_lock(&dev->mutex);
 
 	if (pen_data->coords.status == TS_TOUCH) {
-		 /*add rotate for pen*/
-               if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION,
-                       "90", 2) == 0) {
-                       tpd_rotate_90(&pen_data->coords.x, &pen_data->coords.y);
-               } else if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION,
-                       "180", 3) == 0) {
-                       tpd_rotate_180(&pen_data->coords.x, &pen_data->coords.y);
-               } else if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION,
-                       "270", 3) == 0) {
-                       tpd_rotate_270(&pen_data->coords.x, &pen_data->coords.y);
-               }
+		goodix_ts_rotate(dev, &pen_data->coords.x,
+				 &pen_data->coords.y);
 		input_report_key(dev, BTN_TOUCH, 1);
 		input_report_key(dev, pen_data->coords.tool_type, 1);
 		input_report_abs(dev, ABS_X, pen_data->coords.x);
@@ -1440,18 +1467,8 @@ static void goodix_ts_report_finger(struct input_dev *dev,
 			input_mt_slot(dev, i);
 			input_mt_report_slot_state(dev, MT_TOOL_FINGER, true);
 
-		/*add rotate for pen*/
-               if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION,
-                       "90", 2) == 0) {
-                       tpd_rotate_90(&touch_data->coords[i].x, &touch_data->coords[i].y);
-               } else if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION,
-                       "180", 3) == 0) {
-                       tpd_rotate_180(&touch_data->coords[i].x, &touch_data->coords[i].y);
-               } else if (strncmp(CONFIG_MTK_LCM_PHYSICAL_ROTATION,
-                       "270", 3) == 0) {
-                       tpd_rotate_270(&touch_data->coords[i].x, &touch_data->coords[i].y);
-               }
-
+			goodix_ts_rotate(dev, &touch_data->coords[i].x,
+					 &touch_data->coords[i].y);
 
 			input_report_abs(dev, ABS_MT_POSITION_X,
 					touch_data->coords[i].x);
@@ -2372,7 +2389,8 @@ int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 	goodix_ts_procfs_init(cd);
 
 	/* esd protector */
-	goodix_ts_esd_init(cd);
+	if (cd->board_data.esd_enable)
+		goodix_ts_esd_init(cd);
 
 	/* gesture init */
 	gesture_module_init();
@@ -2633,9 +2651,11 @@ static int goodix_ts_remove(struct platform_device *pdev)
 	#endif
 		ctn730_notifier_unregister(&core_data->ctn730_notifier);
 		core_module_prob_sate = CORE_MODULE_REMOVED;
-		if (atomic_read(&core_data->ts_esd.esd_on))
-			goodix_ts_esd_off(core_data);
-		goodix_ts_unregister_notifier(&ts_esd->esd_notifier);
+		if (core_data->board_data.esd_enable) {
+			if (atomic_read(&core_data->ts_esd.esd_on))
+				goodix_ts_esd_off(core_data);
+			goodix_ts_unregister_notifier(&ts_esd->esd_notifier);
+		}
 
 		goodix_fw_update_uninit();
 		goodix_ts_input_dev_remove(core_data);
