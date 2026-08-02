@@ -271,6 +271,8 @@ TRACE_EVENT(ppm_limit_callback_update,
 		__entry->min_cpu_core, __entry->max_cpu_core)
 );
 
+/* Raw BPF tracepoints in this kernel accept at most 12 arguments. */
+#if !defined(TRACE_HEADER_MULTI_READ) || !defined(__CAST_TO_U64)
 TRACE_EVENT(hps_update,
 
 	TP_PROTO(unsigned int actionID,
@@ -329,6 +331,7 @@ TRACE_EVENT(hps_update,
 		__entry->down_avg, __entry->tlp_avg, __entry->rush_cnt,
 		__get_str(target))
 );
+#endif
 
 #if 0
 TRACE_EVENT(sched_update,
@@ -510,6 +513,8 @@ TRACE_EVENT(perf_index_s,
 );
 
 
+	/* Keep the 15-argument tracepoint ABI, but omit its raw BPF map. */
+#if !defined(TRACE_HEADER_MULTI_READ) || !defined(__CAST_TO_U64)
 	TRACE_EVENT(perf_index_l,
 
 	TP_PROTO(
@@ -591,6 +596,7 @@ TRACE_EVENT(perf_index_s,
 		__entry->stall[4], __entry->stall[5],
 		__entry->stall[6], __entry->stall[7])
 );
+#endif
 
 #endif /* _TRACE_MTK_EVENTS_H */
 

@@ -1055,6 +1055,8 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 			kgdb_step_ref_put();
 			if (!kernel_active_single_step())
 				kgdb_step_ref_get(linux_regs);
+			else
+				kernel_rewind_single_step(linux_regs);
 		}
 		err = 0;
 		break;
@@ -1102,7 +1104,7 @@ static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
 		/* Restore the core handoff state a competing master may change. */
 		atomic_set(&kgdb_cpu_doing_single_step, raw_smp_processor_id());
 		kgdb_single_step = 1;
-		kgdb_handle_exception(1, SIGTRAP, 0, regs);
+		kgdb_handle_exception(0, SIGTRAP, 0, regs);
 		return DBG_HOOK_HANDLED;
 	}
 
@@ -1110,7 +1112,7 @@ static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
 		return DBG_HOOK_ERROR;
 
 	kgdb_step_ref_put();
-	kgdb_handle_exception(1, SIGTRAP, 0, regs);
+	kgdb_handle_exception(0, SIGTRAP, 0, regs);
 	return DBG_HOOK_HANDLED;
 }
 NOKPROBE_SYMBOL(kgdb_step_brk_fn);

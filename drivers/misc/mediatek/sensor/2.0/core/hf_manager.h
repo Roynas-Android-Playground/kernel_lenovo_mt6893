@@ -139,7 +139,12 @@ struct hf_client {
 	pid_t ppid;                    /* poll thread pid */
 };
 
-#define set_interrupt_timestamp(m, t) (atomic64_set(&m->timestamp, t))
+static inline void set_interrupt_timestamp(struct hf_manager *manager,
+		int64_t timestamp)
+{
+	atomic64_set(&manager->timestamp, timestamp);
+}
+
 #define get_interrupt_timestamp(m) (atomic64_read(&m->timestamp))
 
 static inline void hf_device_set_private_data(struct hf_device *device,

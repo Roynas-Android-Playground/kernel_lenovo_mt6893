@@ -13,6 +13,7 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "Task-Turbo: " fmt
 
+#include <linux/cgroup.h>
 #include <linux/list.h>
 #include <linux/sched.h>
 #include <linux/module.h>
@@ -287,12 +288,14 @@ static inline int get_st_group_id(struct task_struct *task)
 {
 #if IS_ENABLED(CONFIG_SCHED_TUNE)
 	const int subsys_id = schedtune_cgrp_id;
-	struct cgroup *grp;
+	struct cgroup_subsys_state *css;
+	int id;
 
 	rcu_read_lock();
-	grp = task_cgroup(task, subsys_id);
+	css = task_css(task, subsys_id);
+	id = css->id;
 	rcu_read_unlock();
-	return grp->id;
+	return id;
 #else
 	return 0;
 #endif

@@ -404,7 +404,7 @@ static u32 read_spm_pwr_status(void)
 		return clkdbg_ops->get_spm_pwr_status();
 }
 
-static s32 *read_spm_pwr_status_array(void)
+static u32 *read_spm_pwr_status_array(void)
 {
 	static void __iomem *scpsys_base, *pwr_sta, *pwr_sta_2nd;
 	static int pwr_sta_val[STA_NUM];
@@ -467,7 +467,7 @@ static bool pvdck_pwr_is_on(struct provider_clk *pvdck, u32 *spm_pwr_status, int
 	struct clk_hw *c_hw = __clk_get_hw(c);
 
 	if (array_size == 1)
-		return clk_hw_pwr_sta_is_on(c_hw, spm_pwr_status, pvdck);
+		return clk_hw_pwr_sta_is_on(c_hw, *spm_pwr_status, pvdck);
 
 	return clk_hw_pwr_is_on(c_hw, spm_pwr_status, pvdck);
 }
@@ -1943,13 +1943,13 @@ static struct save_point save_point_1;
 static struct save_point save_point_2;
 static struct save_point save_point_3;
 
-static void save_pwr_status(u32 spm_pwr_status)
+static void save_pwr_status(u32 *spm_pwr_status)
 {
-	spm_pwr_status = read_spm_pwr_status();
+	*spm_pwr_status = read_spm_pwr_status();
 }
 
 static void save_all_clks_state(struct provider_clk_state *clks_states,
-				u32 *spm_pwr_status)
+				u32 spm_pwr_status)
 {
 	struct provider_clk *pvdck = get_all_provider_clks();
 	struct provider_clk_state *st = clks_states;
@@ -1960,7 +1960,7 @@ static void save_all_clks_state(struct provider_clk_state *clks_states,
 
 		st->pvdck = pvdck;
 		st->prepared = clk_hw_is_prepared(c_hw);
-		st->enabled = clk_hw_pwr_is_on(c_hw, spm_pwr_status, pvdck);
+		st->enabled = clk_hw_pwr_sta_is_on(c_hw, spm_pwr_status, pvdck);
 		st->enable_count = __clk_get_enable_count(c);
 		st->rate = clk_hw_get_rate(c_hw);
 		st->parent = IS_ERR_OR_NULL(c) ? NULL : clk_get_parent(c);
@@ -2019,7 +2019,7 @@ static void show_save_point(struct save_point *sp)
 
 static void store_save_point(struct save_point *sp)
 {
-	save_pwr_status(sp->spm_pwr_status);
+	save_pwr_status(&sp->spm_pwr_status);
 	save_all_clks_state(sp->clks_states, sp->spm_pwr_status);
 
 #if CLKDBG_PM_DOMAIN

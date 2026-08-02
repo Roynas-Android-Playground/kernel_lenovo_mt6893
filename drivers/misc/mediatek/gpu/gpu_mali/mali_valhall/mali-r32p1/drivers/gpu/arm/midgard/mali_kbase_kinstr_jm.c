@@ -34,6 +34,7 @@
 
 #include <asm/barrier.h>
 #include <linux/anon_inodes.h>
+#include <linux/build_bug.h>
 #include <linux/circ_buf.h>
 #include <linux/fs.h>
 #include <linux/kref.h>
@@ -46,18 +47,6 @@
 #include <linux/spinlock.h>
 #include <linux/version.h>
 #include <linux/wait.h>
-
-#if KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE
-#include <linux/build_bug.h>
-#else
-// Stringify the expression if no message is given.
-#define static_assert(e, ...)  __static_assert(e, #__VA_ARGS__, #e)
-#define __static_assert(e, msg, ...) _Static_assert(e, msg)
-#endif
-
-#if KERNEL_VERSION(4, 16, 0) >= LINUX_VERSION_CODE
-typedef unsigned int __poll_t;
-#endif
 
 #ifndef ENOTSUP
 #define ENOTSUP EOPNOTSUPP

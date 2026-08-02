@@ -24,6 +24,8 @@
 	"power_save=%d,mem_ctx=%u,tcm_force=%d,tcm_usage=0x%x,"\
 	"tcm_real_usage=0x%x,boost=%u,ip_time=%u,ret=%d\n"\
 
+/* Raw BPF tracepoints in this kernel accept at most 12 arguments. */
+#if !defined(TRACE_HEADER_MULTI_READ) || !defined(__CAST_TO_U64)
 TRACE_EVENT(mdw_cmd,
 	TP_PROTO(uint32_t done, pid_t pid, pid_t tgid, uint64_t uid,
 		uint64_t cmd_id, int sc_idx, uint32_t num_sc, int type,
@@ -134,6 +136,7 @@ TRACE_EVENT(mdw_cmd,
 		__entry->ret
 	)
 );
+#endif
 #undef MDW_TAG_CMD_PRINT
 
 #endif /* #if !defined(_MDW_EVENTS_H__) || defined(TRACE_HEADER_MULTI_READ) */
@@ -145,4 +148,3 @@ TRACE_EVENT(mdw_cmd,
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE mdw_events
 #include <trace/define_trace.h>
-

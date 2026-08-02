@@ -206,12 +206,12 @@ static inline int get_stune_id(struct task_struct *task)
 {
 #if IS_ENABLED(CONFIG_SCHED_TUNE)
 	const int subsys_id = schedtune_cgrp_id;
-	struct cgroup *grp;
+	int grp_id;
 
 	rcu_read_lock();
-	grp = task_cgroup(task, subsys_id);
+	grp_id = task_css(task, subsys_id)->id;
 	rcu_read_unlock();
-	return grp->id;
+	return grp_id;
 #else
 	return 0;
 #endif
@@ -225,7 +225,8 @@ static inline bool is_important(struct task_struct *task)
 	if (ctl_turbo_group && is_turbo_task(task))
 		return true;
 #endif
-	if (ctl_suppress_group & (1 << grp_id))
+	if (grp_id >= 0 && grp_id < BITS_PER_TYPE(unsigned int) &&
+	    (ctl_suppress_group & (1U << grp_id)))
 		return false;
 	return true;
 }

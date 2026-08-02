@@ -22,6 +22,7 @@
  *  distribution for more details.
  */
 
+#include "cgroup-internal.h"
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/cpuset.h>
@@ -1296,7 +1297,7 @@ int current_cpuset_is_being_rebound(void)
 static int update_relax_domain_level(struct cpuset *cs, s64 val)
 {
 #ifdef CONFIG_SMP
-	if (val < -1 || val >= sched_domain_level_max)
+	if (val < -1 || val > sched_domain_level_max + 1)
 		return -EINVAL;
 #endif
 
@@ -1530,7 +1531,9 @@ static void cpuset_cancel_attach(struct cgroup_taskset *tset)
 	cs = css_cs(css);
 
 	mutex_lock(&cpuset_mutex);
-	css_cs(css)->attach_in_progress--;
+	cs->attach_in_progress--;
+	if (!cs->attach_in_progress)
+		wake_up(&cpuset_attach_wq);
 	mutex_unlock(&cpuset_mutex);
 }
 
@@ -1554,6 +1557,7 @@ static void cpuset_attach(struct cgroup_taskset *tset)
 	cgroup_taskset_first(tset, &css);
 	cs = css_cs(css);
 
+	cpus_read_lock();
 	mutex_lock(&cpuset_mutex);
 
 	/* prepare for attach */
@@ -1609,6 +1613,7 @@ static void cpuset_attach(struct cgroup_taskset *tset)
 		wake_up(&cpuset_attach_wq);
 
 	mutex_unlock(&cpuset_mutex);
+	cpus_read_unlock();
 }
 
 /* The various types of files and directories in a cpuset file system */
@@ -2416,7 +2421,8 @@ void cpuset_wait_for_hotplug(void)
  * use original cs request.
  * cgroup_id: if 0, set all child groups.
  */
-void set_user_space_global_cpuset(struct cpumask *global_cpus, int cgroup_id)
+void set_user_space_global_cpuset(struct cpumask *global_cpus,
+				  int target_cgroup_id)
 {
 	bool need_rebuild_sched_domains = false;
 	struct cpuset *cs;
@@ -2428,7 +2434,8 @@ void set_user_space_global_cpuset(struct cpumask *global_cpus, int cgroup_id)
 		struct cpuset *parent;
 
 		if (cs == &top_cpuset || !css_tryget_online(&cs->css) ||
-			(cgroup_id != 0 && cs->css.cgroup->id != cgroup_id))
+		    (target_cgroup_id != 0 &&
+		     cgroup_id(cs->css.cgroup) != target_cgroup_id))
 			continue;
 
 		parent = parent_cs(cs);
@@ -2466,9 +2473,9 @@ void set_user_space_global_cpuset(struct cpumask *global_cpus, int cgroup_id)
 
 		printk_deferred("[name:global_cpuset&]final set:0x%lx cgroup:",
 				cs->effective_cpus->bits[0]);
-		printk_deferred("%s, id:%d\n",
+		printk_deferred("%s, id:%llu\n",
 				cs->css.cgroup->kn->name,
-				cs->css.cgroup->id);
+				(unsigned long long)cgroup_id(cs->css.cgroup));
 
 		/* use cs->effective_cpus to update cs cpumask */
 		update_tasks_cpumask(cs);
@@ -2497,7 +2504,7 @@ void set_user_space_global_cpuset(struct cpumask *global_cpus, int cgroup_id)
  * If original cs request is empty, use parent effective_cpus.
  * cgroup_id: if 0, unset all child groups.
  */
-void unset_user_space_global_cpuset(int cgroup_id)
+void unset_user_space_global_cpuset(int target_cgroup_id)
 {
 	bool need_rebuild_sched_domains = false;
 	struct cpuset *cs;
@@ -2516,7 +2523,8 @@ void unset_user_space_global_cpuset(int cgroup_id)
 		struct cpuset *parent;
 
 		if (cs == &top_cpuset || !css_tryget_online(&cs->css) ||
-			(cgroup_id != 0 && cs->css.cgroup->id != cgroup_id))
+		    (target_cgroup_id != 0 &&
+		     cgroup_id(cs->css.cgroup) != target_cgroup_id))
 			continue;
 
 		parent = parent_cs(cs);
@@ -2547,10 +2555,10 @@ void unset_user_space_global_cpuset(int cgroup_id)
 			!cpumask_equal(cs->cpus_allowed, cs->effective_cpus));
 
 		printk_deferred("[name:global_cpuset&]final unset:");
-		printk_deferred("0x%lx cgroup:%s, id:%d\n",
+		printk_deferred("0x%lx cgroup:%s, id:%llu\n",
 				cs->effective_cpus->bits[0],
 				cs->css.cgroup->kn->name,
-				cs->css.cgroup->id);
+				(unsigned long long)cgroup_id(cs->css.cgroup));
 		pr_cont_cgroup_name(cs->css.cgroup);
 		printk_deferred("\n");
 
@@ -2600,8 +2608,11 @@ static struct notifier_block cpuset_track_online_nodes_nb = {
  */
 void __init cpuset_init_smp(void)
 {
-	cpumask_copy(top_cpuset.cpus_allowed, cpu_active_mask);
-	top_cpuset.mems_allowed = node_states[N_MEMORY];
+	/*
+	 * cpus_allowd/mems_allowed set to v2 values in the initial
+	 * cpuset_bind() call will be reset to v1 values in another
+	 * cpuset_bind() call when v1 cpuset is mounted.
+	 */
 	top_cpuset.old_mems_allowed = top_cpuset.mems_allowed;
 
 	cpumask_copy(top_cpuset.effective_cpus, cpu_active_mask);
@@ -2945,10 +2956,14 @@ int proc_cpuset_show(struct seq_file *m, struct pid_namespace *ns,
 	if (!buf)
 		goto out;
 
-	css = task_get_css(tsk, cpuset_cgrp_id);
-	retval = cgroup_path_ns(css->cgroup, buf, PATH_MAX,
-				current->nsproxy->cgroup_ns);
-	css_put(css);
+	rcu_read_lock();
+	spin_lock_irq(&css_set_lock);
+	css = task_css(tsk, cpuset_cgrp_id);
+	retval = cgroup_path_ns_locked(css->cgroup, buf, PATH_MAX,
+				       current->nsproxy->cgroup_ns);
+	spin_unlock_irq(&css_set_lock);
+	rcu_read_unlock();
+
 	if (retval >= PATH_MAX)
 		retval = -ENAMETOOLONG;
 	if (retval < 0)

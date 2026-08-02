@@ -970,7 +970,7 @@ int mtk_emimpu_register_callback(
 	if (!mpucb)
 		return -ENOMEM;
 
-	mpucb->owner = __builtin_return_address(0);
+	mpucb->owner = _RET_IP_;
 	mpucb->debug_dump = debug_dump;
 	mpucb->handled = false;
 

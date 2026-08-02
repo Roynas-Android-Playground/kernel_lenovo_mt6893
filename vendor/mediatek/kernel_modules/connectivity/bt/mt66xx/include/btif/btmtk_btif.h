@@ -12,6 +12,7 @@
 #include <linux/irqreturn.h>
 #include <linux/workqueue.h>
 #include <linux/pm_qos.h>
+#include <linux/sched.h>
 
 #include "conninfra.h"
 #include "conn_power_throttling.h"
@@ -200,10 +201,6 @@ struct bt_dump_queue {
 #define BT_BTIF_DUMP_LOG		0x04
 #define BT_BTIF_DUMP_DMA		0x08
 #define BT_BTIF_DUMP_ALL		0x0F
-
-struct sched_param {
-	int sched_priority;
-};
 
 struct bt_dbg_st {
 	bool rt_thd_enable;

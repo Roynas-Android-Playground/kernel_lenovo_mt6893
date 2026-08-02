@@ -38,6 +38,7 @@
 #include <linux/delay.h>
 #include <linux/nmi.h>
 #include <linux/time.h>
+#include <linux/timekeeping.h>
 #include <linux/ptrace.h>
 #include <linux/sysctl.h>
 #include <linux/cpu.h>
@@ -398,6 +399,13 @@ int kdb_set(int argc, const char **argv)
 
 	if (argc != 2)
 		return KDB_ARGCOUNT;
+
+	/*
+	 * Censor sensitive variables
+	 */
+	if (strcmp(argv[1], "PROMPT") == 0 &&
+	    !kdb_check_flags(KDB_ENABLE_MEM_READ, kdb_cmd_enabled, false))
+		return KDB_NOPERM;
 
 	/*
 	 * Check for internal variables
@@ -1289,14 +1297,9 @@ static int kdb_local(kdb_reason_t reason, int error, struct pt_regs *regs,
 		*(cmd_hist[cmd_head]) = '\0';
 
 do_full_getstr:
-#if defined(CONFIG_SMP)
+		/* PROMPT can only be set if we have MEM_READ permission. */
 		snprintf(kdb_prompt_str, CMD_BUFLEN, kdbgetenv("PROMPT"),
 			 raw_smp_processor_id());
-#else
-		snprintf(kdb_prompt_str, CMD_BUFLEN, kdbgetenv("PROMPT"));
-#endif
-		if (defcmd_in_progress)
-			strncat(kdb_prompt_str, "[defcmd]", CMD_BUFLEN);
 
 		/*
 		 * Fetch command from keyboard
@@ -2503,7 +2506,7 @@ struct kdb_tm {
 	int tm_year;	/* year */
 };
 
-static void kdb_gmtime(struct timespec *tv, struct kdb_tm *tm)
+static void kdb_gmtime(const struct timespec64 *tv, struct kdb_tm *tm)
 {
 	/* This will work from 1970-2099, 2100 is not a leap year */
 	static int mon_day[] = { 31, 29, 31, 30, 31, 30, 31,
@@ -2554,7 +2557,7 @@ static void kdb_sysinfo(struct sysinfo *val)
  */
 static int kdb_summary(int argc, const char **argv)
 {
-	struct timespec now;
+	struct timespec64 now;
 	struct kdb_tm tm;
 	struct sysinfo val;
 
@@ -2569,7 +2572,7 @@ static int kdb_summary(int argc, const char **argv)
 	kdb_printf("domainname %s\n", init_uts_ns.name.domainname);
 	kdb_printf("ccversion  %s\n", __stringify(CCVERSION));
 
-	now = __current_kernel_time();
+	now = current_kernel_time64();
 	kdb_gmtime(&now, &tm);
 	kdb_printf("date       %04d-%02d-%02d %02d:%02d:%02d "
 		   "tz_minuteswest %d\n",

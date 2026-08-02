@@ -24,6 +24,8 @@
 #define _TRACE_CAMSYS_EVENTS_H
 #include <linux/tracepoint.h>
 
+/* Raw BPF tracepoints in this kernel accept at most 12 arguments. */
+#if !defined(TRACE_HEADER_MULTI_READ) || !defined(__CAST_TO_U64)
 TRACE_EVENT(ISP__Pass1_CAM_enter,
 	TP_PROTO(unsigned int hw_module, int imgo_en, int rrzo_en,
 			 int imgo_bpp, int rrzo_bpp,
@@ -82,6 +84,7 @@ TRACE_EVENT(ISP__Pass1_CAM_enter,
 		__entry->imgo_en,
 		__entry->rrzo_en)
 );
+#endif
 
 /* TP_printk(
  *	"_id=%d, imgo_en=%d, rrzo_en=%d, imgo_bpp=%d,"
@@ -135,4 +138,3 @@ TRACE_EVENT(ISP__Pass1_CAM_leave,
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE met_events_camsys
 #include <trace/define_trace.h>
-
