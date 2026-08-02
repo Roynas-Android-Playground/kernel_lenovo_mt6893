@@ -3712,7 +3712,12 @@ void cmdq_core_release_handle_by_file_node(void *file_node)
 		 * immediately, but we cannot do so due to SMI hang risk.
 		 */
 		client = cmdq_clients[(u32)handle->thread];
-		cmdq_mbox_thread_remove_task(client->chan, handle->pkt);
+#if defined(CMDQ_SECURE_PATH_SUPPORT)
+		if (handle->pkt->sec_data)
+			cmdq_sec_mbox_stop(client);
+		else
+#endif
+			cmdq_mbox_thread_remove_task(client->chan, handle->pkt);
 		cmdq_pkt_auto_release_task(handle, true);
 	}
 	mutex_unlock(&cmdq_handle_list_mutex);
@@ -4492,7 +4497,7 @@ s32 cmdq_pkt_wait_flush_ex_result(struct cmdqRecStruct *handle)
 
 	status = cmdq_pkt_wait_complete(handle->pkt);
 
-	if (handle->profile_exec) {
+	if (handle->profile_exec && cmdq_util_is_feature_en(CMDQ_LOG_FEAT_PERF)) {
 		u32 *va = cmdq_pkt_get_perf_ret(handle->pkt);
 
 		if (va) {

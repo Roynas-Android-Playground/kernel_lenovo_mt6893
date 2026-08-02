@@ -86,6 +86,8 @@ struct imgsensor_struct {
 	kal_uint8 ihdr_en;	//ihdr enable or disable
 
 	kal_uint8 i2c_write_id;	//record current sensor's i2c write id
+	struct IMGSENSOR_AE_FRM_MODE ae_frm_mode;
+	kal_uint8 current_ae_effective_frame;
 };
 
 /* SENSOR PRIVATE STRUCT FOR CONSTANT*/
@@ -122,9 +124,15 @@ struct imgsensor_info_struct {
 	kal_uint8 video_delay_frame;	//enter video delay frame num
 	kal_uint8 hs_video_delay_frame;//enter high speed video  delay frame num
 	kal_uint8 slim_video_delay_frame;//enter slim video delay frame num
+    kal_uint8  frame_time_delay_frame;
 
 	kal_uint8 margin;	//sensor framelength & shutter margin
 	kal_uint32 min_shutter;	//min shutter
+	kal_uint32 min_gain;
+	kal_uint32 max_gain;
+	kal_uint32 min_gain_iso;
+	kal_uint32 gain_step;
+	kal_uint32 gain_type;
 	//max framelength by sensor register's limitation
 	kal_uint32 max_frame_length;
 
@@ -144,6 +152,7 @@ struct imgsensor_info_struct {
 	//must end with 0xff
 	kal_uint8 i2c_addr_table[5];
 	kal_uint32 i2c_speed;	//khz
+	kal_uint8 temperature_support;
 };
 
 /* SENSOR READ/WRITE ID */

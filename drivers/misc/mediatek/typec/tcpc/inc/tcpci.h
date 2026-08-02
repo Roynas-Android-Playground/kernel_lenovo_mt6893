@@ -38,6 +38,8 @@
 #define TCPC_LOW_RP_DUTY		(100)		/* 10 % */
 #define TCPC_NORMAL_RP_DUTY	(330)		/* 33 % */
 
+extern int typec_cc_orientation;//yds
+extern int p537_usb_speed;//yds
 /* provide to TCPC interface */
 extern int tcpci_report_usb_port_changed(struct tcpc_device *tcpc);
 extern int tcpci_set_wake_lock(

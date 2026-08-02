@@ -77,6 +77,7 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_ES8328_SPI if SPI_MASTER
 	select SND_SOC_ES8328_I2C if I2C
 	select SND_SOC_ES7134
+	select SND_SOC_ES7243E
 	select SND_SOC_GTM601
 	select SND_SOC_HDAC_HDMI
 	select SND_SOC_ICS43432
@@ -560,6 +561,10 @@ config SND_SOC_HDMI_CODEC
 config SND_SOC_ES7134
        tristate "Everest Semi ES7134 CODEC"
 
+config SND_SOC_ES7243E
+		tristate "Everest Semi ES7243E 2CH ADC"
+		depends on I2C
+
 config SND_SOC_ES8316
 	tristate "Everest Semi ES8316 CODEC"
 	depends on I2C
@@ -576,6 +581,14 @@ config SND_SOC_ES8328_SPI
 	tristate "Everest Semi ES8328 CODEC (SPI)"
 	depends on SPI_MASTER
 	select SND_SOC_ES8328
+
+config SND_SOC_FS16XX
+	tristate "Foursemi speaker amplifier"
+	depends on I2C
+	help
+	  Config of FS18xx . It is a Smart power amplifier which contain speaker protection,
+	  multi-band DRC, equalizer function. It would be set to yes if device with FS18xx on it.
+	  Select this if your FS16xx is connected via an I2S bus.
 
 config SND_SOC_GTM601
 	tristate 'GTM601 UMTS modem audio codec'
@@ -1286,5 +1299,5 @@ config SND_SOC_CS35L41
 	tristate "Cirrus CS35L41 Smart Amp"
 	select SND_SOC_COMPRESS
 	depends on I2C
-
+source "sound/soc/codecs/cs35l43/Kconfig"
 endmenu

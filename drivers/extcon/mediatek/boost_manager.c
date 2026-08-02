@@ -118,7 +118,7 @@ int usb_otg_set_vbus(int is_on)
 	if (is_on) {
 		charger_dev_enable_otg(g_info->primary_charger, true);
 		charger_dev_set_boost_current_limit(g_info->primary_charger,
-			1500000);
+			1300000);
 		if (g_info->polling_interval) {
 			charger_dev_kick_wdt(g_info->primary_charger);
 			enable_boost_polling(true);

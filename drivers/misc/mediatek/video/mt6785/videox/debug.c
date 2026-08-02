@@ -87,7 +87,7 @@ static struct proc_dir_entry *mtkfb_procfs;
 static struct proc_dir_entry *disp_lowpower_proc;
 #endif
 
-unsigned int g_mobilelog = 1;
+unsigned int g_mobilelog;
 int bypass_blank;
 int lcm_mode_status;
 int layer_layout_allow_non_continuous;
@@ -725,6 +725,11 @@ static void process_dbg_opt(const char *opt)
 		int repaint_type;
 
 		ret = sscanf(opt, "repaint:%d\n", &repaint_type);
+		if (ret != 1) {
+			DISP_LOG_E("[%s %d]:sscanf err:%d. str:%s",
+				   __func__, __LINE__, ret, opt);
+			return;
+		}
 		trigger_repaint(repaint_type);
 
 		return;

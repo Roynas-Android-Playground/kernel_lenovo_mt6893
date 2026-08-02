@@ -24,6 +24,7 @@
 #include "mtk-afe-fe-dai.h"
 #include "mtk-base-afe.h"
 #include "../scp_vow/mtk-scp-vow-common.h"
+#include "mtk-sp-common.h"
 
 #if defined(CONFIG_MTK_ION)
 #include "mtk-mmap-ion.h"
@@ -43,6 +44,10 @@
 #include "adsp_helper.h"
 #endif
 
+#if defined(CONFIG_MTK_TINYSYS_SCP_SUPPORT)
+#include <scp_helper.h>
+#endif
+
 #if defined(CONFIG_SND_SOC_MTK_SCP_SMARTPA)
 #include "../scp_spk/mtk-scp-spk-mem-control.h"
 #endif
@@ -52,6 +57,22 @@
 #endif
 
 #define AFE_BASE_END_OFFSET 8
+
+static bool is_semaphore_control_need(bool is_scp_sema_support)
+{
+	bool is_adsp_active = false;
+
+#if defined(CONFIG_MTK_AUDIODSP_SUPPORT)
+	is_adsp_active = is_adsp_feature_in_active();
+#endif
+
+	/* If is_scp_sema_support is true,
+	 * scp semaphore is to ensure AP/SCP/ADSP synchronization.
+	 * Otherwise, using adsp semaphore for synchronization
+	 * if adsp feature is active.
+	 */
+	return is_scp_sema_support | is_adsp_active;
+}
 
 int mtk_regmap_update_bits(struct regmap *map, int reg,
 			   unsigned int mask,
@@ -650,20 +671,24 @@ EXPORT_SYMBOL_GPL(mtk_memif_set_disable);
 int mtk_dsp_memif_set_enable(struct mtk_base_afe *afe, int id)
 {
 	int ret = 0;
-#if defined(CONFIG_MTK_AUDIODSP_SUPPORT) && defined(CONFIG_SND_SOC_MTK_AUDIO_DSP)
-	int adsp_sem_ret = ADSP_ERROR;
+	int adsp_sem_ret = 0;
 
-	if (is_adsp_feature_in_active())
-		adsp_sem_ret = get_adsp_semaphore(SEMA_AUDIOREG);
-	/* get sem ok*/
-	if (adsp_sem_ret == ADSP_OK) {
-		ret = mtk_memif_set_enable(afe, id);
-		release_adsp_semaphore(SEMA_AUDIOREG);
-	} else if (adsp_sem_ret == ADSP_SEMAPHORE_BUSY)
-		pr_info("%s adsp_sem_ret[%d]\n", __func__, adsp_sem_ret);
-	else
-#endif
-		ret = mtk_memif_set_enable(afe, id);
+	if (!afe)
+		return -EPERM;
+
+	if (!is_semaphore_control_need(afe->is_scp_sema_support))
+		return mtk_memif_set_enable(afe, id);
+
+	adsp_sem_ret = AUDREG_SEMA_3WAY_GET(afe->is_scp_sema_support);
+	if (adsp_sem_ret) {
+		pr_info("%s() error adsp_sem_ret: %d, is_scp_sema_support: %d\n",
+			__func__, adsp_sem_ret, afe->is_scp_sema_support);
+		return -EBUSY;
+	}
+
+	ret = mtk_memif_set_enable(afe, id);
+
+	AUDREG_SEMA_3WAY_RELEASE(afe->is_scp_sema_support);
 
 	return ret;
 }
@@ -672,20 +697,24 @@ EXPORT_SYMBOL_GPL(mtk_dsp_memif_set_enable);
 int mtk_dsp_memif_set_disable(struct mtk_base_afe *afe, int id)
 {
 	int ret = 0;
-#if defined(CONFIG_MTK_AUDIODSP_SUPPORT) && defined(CONFIG_SND_SOC_MTK_AUDIO_DSP)
-	int adsp_sem_ret = ADSP_ERROR;
+	int adsp_sem_ret = 0;
 
-	if (is_adsp_feature_in_active())
-		adsp_sem_ret = get_adsp_semaphore(SEMA_AUDIOREG);
-	/* get sem ok*/
-	if (adsp_sem_ret == ADSP_OK) {
-		ret = mtk_memif_set_disable(afe, id);
-		release_adsp_semaphore(SEMA_AUDIOREG);
-	} else if (adsp_sem_ret == ADSP_SEMAPHORE_BUSY)
-		pr_info("%s adsp_sem_ret[%d]\n", __func__, adsp_sem_ret);
-	else
-#endif
-		ret = mtk_memif_set_disable(afe, id);
+	if (!afe)
+		return -EPERM;
+
+	if (!is_semaphore_control_need(afe->is_scp_sema_support))
+		return mtk_memif_set_disable(afe, id);
+
+	adsp_sem_ret = AUDREG_SEMA_3WAY_GET(afe->is_scp_sema_support);
+	if (adsp_sem_ret) {
+		pr_info("%s() error adsp_sem_ret: %d, is_scp_sema_support: %d\n",
+			__func__, adsp_sem_ret, afe->is_scp_sema_support);
+		return -EBUSY;
+	}
+
+	ret = mtk_memif_set_disable(afe, id);
+
+	AUDREG_SEMA_3WAY_RELEASE(afe->is_scp_sema_support);
 
 	return ret;
 }
@@ -696,30 +725,29 @@ int mtk_dsp_irq_set_enable(struct mtk_base_afe *afe,
 			   const struct mtk_base_irq_data *irq_data)
 {
 	int ret = 0;
-#if defined(CONFIG_MTK_AUDIODSP_SUPPORT) && defined(CONFIG_SND_SOC_MTK_AUDIO_DSP)
-	int adsp_sem_ret = ADSP_ERROR;
-#endif
+	int adsp_sem_ret = 0;
 
 	if (!afe)
 		return -EPERM;
 	if (!irq_data)
 		return -EPERM;
-#if defined(CONFIG_MTK_AUDIODSP_SUPPORT) && defined(CONFIG_SND_SOC_MTK_AUDIO_DSP)
-	if (is_adsp_feature_in_active())
-		adsp_sem_ret = get_adsp_semaphore(SEMA_AUDIOREG);
-	/* get sem ok*/
-	if (adsp_sem_ret == ADSP_OK) {
-		regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
-				   1 << irq_data->irq_en_shift,
-				   1 << irq_data->irq_en_shift);
-		release_adsp_semaphore(SEMA_AUDIOREG);
-	} else if (adsp_sem_ret == ADSP_SEMAPHORE_BUSY)
-		pr_info("%s adsp_sem_ret[%d]\n", __func__, adsp_sem_ret);
-	else
-#endif
-		regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
-				   1 << irq_data->irq_en_shift,
-				   1 << irq_data->irq_en_shift);
+
+	if (!is_semaphore_control_need(afe->is_scp_sema_support))
+		return regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
+					  1 << irq_data->irq_en_shift,
+					  1 << irq_data->irq_en_shift);
+
+	adsp_sem_ret = AUDREG_SEMA_3WAY_GET(afe->is_scp_sema_support);
+	if (adsp_sem_ret) {
+		pr_info("%s() error adsp_sem_ret: %d, is_scp_sema_support: %d\n",
+			__func__, adsp_sem_ret, afe->is_scp_sema_support);
+		return -EBUSY;
+	}
+
+	regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
+			   1 << irq_data->irq_en_shift,
+			   1 << irq_data->irq_en_shift);
+	AUDREG_SEMA_3WAY_RELEASE(afe->is_scp_sema_support);
 
 	return ret;
 }
@@ -729,32 +757,29 @@ int mtk_dsp_irq_set_disable(struct mtk_base_afe *afe,
 			    const struct mtk_base_irq_data *irq_data)
 {
 	int ret = 0;
-#if defined(CONFIG_MTK_AUDIODSP_SUPPORT) && defined(CONFIG_SND_SOC_MTK_AUDIO_DSP)
-		int adsp_sem_ret = ADSP_ERROR;
-#endif
+	int adsp_sem_ret = 0;
 
 	if (!afe)
 		return -EPERM;
 	if (!irq_data)
 		return -EPERM;
 
-#if defined(CONFIG_MTK_AUDIODSP_SUPPORT) && defined(CONFIG_SND_SOC_MTK_AUDIO_DSP)
-	if (is_adsp_feature_in_active())
-		adsp_sem_ret = get_adsp_semaphore(SEMA_AUDIOREG);
+	if (!is_semaphore_control_need(afe->is_scp_sema_support))
+		return regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
+					  1 << irq_data->irq_en_shift,
+					  0 << irq_data->irq_en_shift);
 
-	/* get sem ok*/
-	if (adsp_sem_ret == ADSP_OK) {
-		regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
-				   1 << irq_data->irq_en_shift,
-				   0 << irq_data->irq_en_shift);
-		release_adsp_semaphore(SEMA_AUDIOREG);
-	} else if (adsp_sem_ret == ADSP_SEMAPHORE_BUSY)
-		pr_info("%s adsp_sem_ret[%d]\n", __func__, adsp_sem_ret);
-	else
-#endif
-		regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
-				   1 << irq_data->irq_en_shift,
-				   0 << irq_data->irq_en_shift);
+	adsp_sem_ret = AUDREG_SEMA_3WAY_GET(afe->is_scp_sema_support);
+	if (adsp_sem_ret) {
+		pr_info("%s() error adsp_sem_ret: %d, is_scp_sema_support: %d\n",
+			__func__, adsp_sem_ret, afe->is_scp_sema_support);
+		return -EBUSY;
+	}
+
+	regmap_update_bits(afe->regmap, irq_data->irq_en_reg,
+			   1 << irq_data->irq_en_shift,
+			   0 << irq_data->irq_en_shift);
+	AUDREG_SEMA_3WAY_RELEASE(afe->is_scp_sema_support);
 
 	return ret;
 }
@@ -906,7 +931,8 @@ int mtk_memif_set_format(struct mtk_base_afe *afe,
 	case SNDRV_PCM_FORMAT_S32_LE:
 	case SNDRV_PCM_FORMAT_U32_LE:
 		if (memif_32bit_supported)
-			hd_audio = 2;
+			//hd_audio = 2;
+			hd_audio = 1;
 		else
 			hd_audio = 1;
 		break;

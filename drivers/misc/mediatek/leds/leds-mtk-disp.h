@@ -32,4 +32,5 @@ extern int mtkfb_set_backlight_level(unsigned int level);
 extern void disp_pq_notify_backlight_changed(int bl_1024);
 extern int enable_met_backlight_tag(void);
 extern int output_met_backlight_tag(int level);
+extern int disp_set_ccorr_by_idx(int bl_1024);
 

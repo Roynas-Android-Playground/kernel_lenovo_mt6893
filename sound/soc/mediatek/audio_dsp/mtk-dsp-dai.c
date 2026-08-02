@@ -25,7 +25,7 @@ static const struct snd_soc_component_driver mtk_dai_dsp_component = {
 
 static int mtk_dai_stub_compress_new(struct snd_soc_pcm_runtime *rtd, int num)
 {
-#ifdef CONFIG_SND_SOC_COMPRESS
+#if 1
 	snd_soc_new_compress(rtd, num);
 #endif
 	return 0;

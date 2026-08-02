@@ -1393,7 +1393,7 @@ static int mtkts_btsmdpa_register_thermal(void)
 	mtkts_btsmdpa_dprintk("[%s]\n", __func__);
 
 	/* trips : trip 0~1 */
-	thz_dev = mtk_thermal_zone_device_register("mtktsbtsmdpa", num_trip,
+	thz_dev = mtk_thermal_zone_device_register("chargerPump", num_trip,
 					NULL, &mtkts_btsmdpa_dev_ops, 0, 0, 0,
 					interval * 1000);
 

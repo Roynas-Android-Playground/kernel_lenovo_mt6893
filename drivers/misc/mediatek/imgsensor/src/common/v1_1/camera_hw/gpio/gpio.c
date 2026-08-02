@@ -44,7 +44,13 @@ struct GPIO_PINCTRL gpio_pinctrl_list_switch[
 
 extern void gpio_dump_regs(void);
 
+extern int BoardId;
+extern MUINT32 Rear_SensorID;
+
 static struct GPIO gpio_instance;
+
+struct pinctrl_state *cam0_dvdd11_low;
+struct pinctrl_state *cam0_dvdd11_high;
 
 static enum IMGSENSOR_RETURN gpio_init(
 	void *pinstance,
@@ -117,6 +123,14 @@ static enum IMGSENSOR_RETURN gpio_init(
 	}
 #endif
 
+	cam0_dvdd11_low = pinctrl_lookup_state(pgpio->ppinctrl, "cam0_dvdd11_en0");
+	cam0_dvdd11_high = pinctrl_lookup_state(pgpio->ppinctrl, "cam0_dvdd11_en1");
+
+	if(BoardId == 4) {
+		pgpio->ppinctrl_state_cam[0][4] = pgpio->ppinctrl_state_cam[1][4];
+		pgpio->ppinctrl_state_cam[0][5] = pgpio->ppinctrl_state_cam[1][5];
+	}
+
 	return ret;
 }
 
@@ -169,6 +183,13 @@ static enum IMGSENSOR_RETURN gpio_set(
 	}
 
 	mutex_lock(pgpio->pgpio_mutex);
+
+	if( (BoardId == 1) || (BoardId == 2) || (BoardId >= 5)) {
+		if((sensor_idx == 0)&&(Rear_SensorID == 0x1339)&&(pin == IMGSENSOR_HW_PIN_DVDD)) {
+			pgpio->ppinctrl_state_cam[0][GPIO_CTRL_STATE_LDO_VCAMD_H] = cam0_dvdd11_high;
+			pgpio->ppinctrl_state_cam[0][GPIO_CTRL_STATE_LDO_VCAMD_L] = cam0_dvdd11_low;
+		}
+	}
 
 	if (ppinctrl_state != NULL && !IS_ERR(ppinctrl_state))
 		pinctrl_select_state(pgpio->ppinctrl, ppinctrl_state);

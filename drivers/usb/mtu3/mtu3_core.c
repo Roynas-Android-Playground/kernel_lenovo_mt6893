@@ -24,6 +24,7 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 
+#include "../../misc/mediatek/typec/tcpc/inc/tcpci.h"
 #include "mtu3.h"
 #include "mtu3_dr.h"
 #ifdef CONFIG_USB_MTU3_PLAT_PHONE
@@ -600,6 +601,8 @@ static irqreturn_t mtu3_link_isr(struct mtu3 *mtu)
 	switch (speed) {
 	case MTU3_SPEED_FULL:
 		udev_speed = USB_SPEED_FULL;
+		printk("yyds:usb is on FULLspeed,P537_USB_SPEED=0");
+		p537_usb_speed = 0;
 		/*BESLCK = 4 < BESLCK_U3 = 10 < BESLDCK = 15 */
 		mtu3_writel(mbase, U3D_USB20_LPM_PARAMETER, LPM_BESLDCK(0xf)
 				| LPM_BESLCK(4) | LPM_BESLCK_U3(0xa));
@@ -608,6 +611,8 @@ static irqreturn_t mtu3_link_isr(struct mtu3 *mtu)
 		break;
 	case MTU3_SPEED_HIGH:
 		udev_speed = USB_SPEED_HIGH;
+		printk("yyds:usb is on HIGHspeed,P537_USB_SPEED=0");
+		p537_usb_speed = 0;
 		/*BESLCK = 4 < BESLCK_U3 = 10 < BESLDCK = 15 */
 		mtu3_writel(mbase, U3D_USB20_LPM_PARAMETER, LPM_BESLDCK(0xf)
 				| LPM_BESLCK(4) | LPM_BESLCK_U3(0xa));
@@ -616,6 +621,8 @@ static irqreturn_t mtu3_link_isr(struct mtu3 *mtu)
 		break;
 	case MTU3_SPEED_SUPER:
 		udev_speed = USB_SPEED_SUPER;
+		printk("yyds:usb is on SUPERspeed,P537_USB_SPEED=1");
+		p537_usb_speed = 1;
 		maxpkt = 512;
 		break;
 	default:

@@ -22,6 +22,8 @@
 #include <mt-plat/mtk_boot.h>
 #include <mt-plat/mtk_charger.h>
 
+#include "../accdet/mt6359/accdet.h"
+#include <linux/soc/mediatek/ocp96011-i2c.h>
 #define RT_PD_MANAGER_VERSION	"1.0.6_MTK"
 
 struct rt_pd_manager_data {
@@ -47,6 +49,10 @@ void __attribute__((weak)) usb_dpdm_pulldown(bool enable)
 {
 	pr_notice("%s is not defined\n", __func__);
 }
+
+#if defined(CONFIG_OCP96011_I2C)
+extern void typec_headphone_irq_handler(int state);
+#endif
 
 static int pd_tcp_notifier_call(struct notifier_block *nb,
 				unsigned long event, void *data)
@@ -145,10 +151,18 @@ static int pd_tcp_notifier_call(struct notifier_block *nb,
 		} else if (old_state == TYPEC_UNATTACHED &&
 			   new_state == TYPEC_ATTACHED_AUDIO) {
 			dev_info(rpmd->dev, "%s Audio plug in\n", __func__);
+#if defined(CONFIG_OCP96011_I2C)
+			ocp96011_switch_event(0);
+			typec_headphone_irq_handler(1);
+#endif
 			/* enable AudioAccessory connection */
 		} else if (old_state == TYPEC_ATTACHED_AUDIO &&
 			   new_state == TYPEC_UNATTACHED) {
 			dev_info(rpmd->dev, "%s Audio plug out\n", __func__);
+#if defined(CONFIG_OCP96011_I2C)
+			ocp96011_switch_event(1);
+			typec_headphone_irq_handler(0);
+#endif
 			/* disable AudioAccessory connection */
 		}
 

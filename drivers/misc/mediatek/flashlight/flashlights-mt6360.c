@@ -788,6 +788,26 @@ err_node_put:
 	return -EINVAL;
 }
 
+// add for ata test
+static struct kobject* torch_kobject;
+static ssize_t torch_brightness_set(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	if (buf != NULL || size != 0) {
+		pr_debug("torch_brightness_set buf = %s", buf);
+		if (!strncmp(buf, "true", 4)) {
+			flashlight_set_torch_brightness(flashlight_dev_ch1, mt6360_torch_level[6]);
+			flashlight_set_mode(flashlight_dev_ch1, FLASHLIGHT_MODE_TORCH);
+		} else {
+			flashlight_set_torch_brightness(flashlight_dev_ch1, mt6360_torch_level[0]);
+			flashlight_set_mode(flashlight_dev_ch1, FLASHLIGHT_MODE_OFF);
+		}
+	}
+
+	return size;
+}
+static DEVICE_ATTR(torch_enable, 0664, NULL, torch_brightness_set);
+//
+
 static int mt6360_probe(struct platform_device *pdev)
 {
 	struct mt6360_platform_data *pdata = dev_get_platdata(&pdev->dev);
@@ -860,6 +880,19 @@ static int mt6360_probe(struct platform_device *pdev)
 		if (flashlight_dev_register(MT6360_NAME, &mt6360_ops))
 			return -EFAULT;
 	}
+
+	// add for ata test
+	torch_kobject = kobject_create_and_add("torch", &pdev->dev.kobj);
+	if (torch_kobject) {
+		if (sysfs_create_file(torch_kobject, &dev_attr_torch_enable.attr)) {
+			pr_err("Failed to create sysfs file.\n");
+			return -EFAULT;
+		}
+	} else {
+		pr_err("Failed to create kobject.\n");
+		return -EFAULT;
+	}
+	//
 
 	pr_debug("Probe done.\n");
 

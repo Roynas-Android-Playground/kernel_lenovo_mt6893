@@ -34,5 +34,12 @@ int mtk_drm_ioctl_ccorr_get_irq(struct drm_device *dev, void *data,
 int mtk_drm_ioctl_support_color_matrix(struct drm_device *dev, void *data,
 	struct drm_file *file_priv);
 
+int mtk_drm_ioctl_enable_dc_dimming(struct drm_device *dev, void *data,
+		struct drm_file *file_priv);
+int mtk_drm_ioctl_set_dc_table(struct drm_device *dev, void *data,
+		struct drm_file *file_priv);
+void disp_ccorr_change_bl(struct mtk_ddp_comp *comp);
+int disp_set_ccorr_by_idx(int bl_1024);
+
 #endif
 

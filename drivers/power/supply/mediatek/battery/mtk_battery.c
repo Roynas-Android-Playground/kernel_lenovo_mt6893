@@ -98,6 +98,14 @@
 #define Set_CARTUNE_TO_KERNEL _IOW('k', 15, int)
 /* add for meta tool----------------------------------------- */
 
+extern struct charger_device *g_chg_dev;
+extern int mt6360_enable_hz(struct charger_device *chg_dev, bool en);
+static unsigned int fake_count = 0;
+int fake_temp = 0;
+int fake_capacity = 0;
+int battery_maintain_enable = 0;
+int battery_protected_enable = 0;
+
 static struct class *adc_cali_class;
 static int adc_cali_major;
 static dev_t adc_cali_devno;
@@ -130,6 +138,10 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_BATTERY_TYPE,
+	POWER_SUPPLY_PROP_BATTERY_CHARGING_ENABLED,
+	POWER_SUPPLY_PROP_BATTERY_MAINTAIN,
+	POWER_SUPPLY_PROP_BATTERY_PROTECTED,
 };
 
 /* weak function */
@@ -420,16 +432,35 @@ void battery_update_psd(struct battery_data *bat_data)
 	bat_data->BAT_batt_temp = battery_get_bat_temperature();
 }
 
+static int get_battery_type(void)
+{
+	int batt_id = 1;//get_batt_id();
+
+	if (batt_id == 1)
+		return POWER_SUPPLY_BATTERY_TYPE_MAIN;
+	else if (batt_id == 2)
+		return POWER_SUPPLY_BATTERY_TYPE_SLAVE;
+
+	return  POWER_SUPPLY_BATTERY_TYPE_UNKNOWN;
+}
+
 static int battery_get_property(struct power_supply *psy,
 	enum power_supply_property psp,
 	union power_supply_propval *val)
 {
 	int ret = 0;
 	int fgcurrent = 0;
-	bool b_ischarging = 0;
+	//bool b_ischarging = 0;
+	union power_supply_propval value;
 
 	struct battery_data *data =
 		container_of(psy->desc, struct battery_data, psd);
+
+	struct power_supply *bq_psy = power_supply_get_by_name("bq27541");
+	if (!bq_psy){
+		printk("%s:get bq_psy fail\n",__func__);
+		return 0;
+	}
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
@@ -445,20 +476,30 @@ static int battery_get_property(struct power_supply *psy,
 		val->intval = data->BAT_TECHNOLOGY;
 		break;
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
-		val->intval = gm.bat_cycle;
+		if (fake_count)
+			val->intval = fake_count;
+		else
+			val->intval = gm.bat_cycle;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
-		if (gm.fixed_uisoc != 0xffff)
+		/*if (gm.fixed_uisoc != 0xffff)
 			val->intval = gm.fixed_uisoc;
 		else
-			val->intval = data->BAT_CAPACITY;
+			val->intval = data->BAT_CAPACITY;*/
+		if (fake_capacity){
+			val->intval = fake_capacity;
+		}else{
+			ret = power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_CAPACITY, &value);
+			val->intval = value.intval;
+		}
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		b_ischarging = gauge_get_current(&fgcurrent);
+		/*b_ischarging = gauge_get_current(&fgcurrent);
 		if (b_ischarging == false)
 			fgcurrent = 0 - fgcurrent;
 
-		val->intval = fgcurrent * 100;
+		val->intval = fgcurrent * 100;*/
+		ret = power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_CURRENT_NOW, val);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_AVG:
 		val->intval = battery_get_bat_avg_current() * 100;
@@ -474,13 +515,22 @@ static int battery_get_property(struct power_supply *psy,
 			* 1000 / 100;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		val->intval = data->BAT_batt_vol * 1000;
+		//val->intval = data->BAT_batt_vol * 1000;
+		ret = power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &value);
+		val->intval = value.intval;
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		val->intval = gm.tbat_precise;
+		if (fake_temp)
+			val->intval = fake_temp;
+		else {
+			//val->intval = gm.tbat_precise;
+			ret = power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_TEMP, &value);
+			val->intval = value.intval;
+		}
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
-		val->intval = check_cap_level(data->BAT_CAPACITY);
+		ret = power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_CAPACITY, val);
+		val->intval = check_cap_level(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
 		/* full or unknown must return 0 */
@@ -529,8 +579,18 @@ static int battery_get_property(struct power_supply *psy,
 			val->intval = q_max_uah;
 		}
 		break;
-
-
+	case POWER_SUPPLY_PROP_BATTERY_TYPE:
+		val->intval = get_battery_type();
+		break;
+	case POWER_SUPPLY_PROP_BATTERY_CHARGING_ENABLED:
+		val->intval = battery_main.BAT_STATUS == POWER_SUPPLY_STATUS_CHARGING ? 1 : 0;
+		break;
+	case POWER_SUPPLY_PROP_BATTERY_MAINTAIN:
+		 val->intval = battery_maintain_enable;
+		break;
+	case POWER_SUPPLY_PROP_BATTERY_PROTECTED:
+		 val->intval = battery_protected_enable;
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -538,6 +598,60 @@ static int battery_get_property(struct power_supply *psy,
 
 	return ret;
 }
+
+static int battery_property_is_writeable(struct power_supply *psy,
+						enum power_supply_property psp)
+{
+	switch (psp) {
+		case POWER_SUPPLY_PROP_BATTERY_CHARGING_ENABLED:
+		case POWER_SUPPLY_PROP_CYCLE_COUNT:
+		case POWER_SUPPLY_PROP_TEMP:
+		case POWER_SUPPLY_PROP_BATTERY_MAINTAIN:
+		case POWER_SUPPLY_PROP_BATTERY_PROTECTED:
+		case POWER_SUPPLY_PROP_CAPACITY:
+			return 1;
+		default :
+			return 0;
+	}
+	return 0;
+}
+extern bool *pcmd_discharging;
+static int battery_set_property(struct power_supply *psy,
+	enum power_supply_property psp, const union power_supply_propval *val)
+{
+	int ret=0;
+	switch (psp) {
+		case POWER_SUPPLY_PROP_BATTERY_CHARGING_ENABLED:
+			ret = charger_dev_enable(g_chg_dev, val->intval==1 ? true : false);
+			if(ret){
+				bm_err("[charger_enable]:%s mt6360 charger failed!\n",val->intval==1 ? "enable" : "disenable");
+			}else{
+				battery_main.BAT_STATUS = val->intval==1 ? POWER_SUPPLY_STATUS_CHARGING : POWER_SUPPLY_STATUS_DISCHARGING;
+				*pcmd_discharging = (val->intval==1 ? false : true);
+				charger_dev_enable_powerpath(g_chg_dev, val->intval==1 ? true : false);
+				battery_update(&battery_main);
+			}
+			break;
+		case POWER_SUPPLY_PROP_CYCLE_COUNT:
+			fake_count = val->intval;
+			break;
+		case POWER_SUPPLY_PROP_TEMP:
+			fake_temp = val->intval;
+			break;
+		case POWER_SUPPLY_PROP_BATTERY_MAINTAIN:
+			battery_maintain_enable = val->intval;
+			break;
+		case POWER_SUPPLY_PROP_BATTERY_PROTECTED:
+			battery_protected_enable = val->intval;
+			break;
+		case POWER_SUPPLY_PROP_CAPACITY:
+			fake_capacity = val->intval;
+		default:
+			break;
+	}
+	return 0;
+}
+
 
 /* battery_data initialization */
 struct battery_data battery_main = {
@@ -547,6 +661,8 @@ struct battery_data battery_main = {
 		.properties = battery_props,
 		.num_properties = ARRAY_SIZE(battery_props),
 		.get_property = battery_get_property,
+		.set_property = battery_set_property,
+		.property_is_writeable = battery_property_is_writeable,
 		},
 
 	.BAT_STATUS = POWER_SUPPLY_STATUS_DISCHARGING,
@@ -3792,18 +3908,27 @@ static ssize_t store_BAT_HEALTH(
 	char *s = buf_str, *pch;
 	/* char *ori = buf_str; */
 	int chr_size = 0;
-	int i = 0, count = 0, value[50];
+	int i = 0, j = 0, count = 0, value[50];
 
 
 	bm_err("%s, size =%d, str=%s\n", __func__, size, buf);
 
-	strncpy(buf_str, buf, size);
-	/* bm_err("%s, copy str=%s\n", __func__, buf_str); */
-
-	if (size > 350) {
+	if (size < 90 || size > 350) {
 		bm_err("%s error, size mismatch\n", __func__);
 		return -1;
+	} else {
+		for (i = 0; i < strlen(buf); i++) {
+			if (buf[i] == ',')
+				j++;
+		}
+		if (j != 46) {
+			bm_err("%s error, invalid input\n", __func__);
+			return -1;
+		}
 	}
+
+	strncpy(buf_str, buf, size);
+	/* bm_err("%s, copy str=%s\n", __func__, buf_str); */
 
 	if (buf != NULL && size != 0) {
 

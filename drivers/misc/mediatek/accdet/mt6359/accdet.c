@@ -40,6 +40,7 @@
 #endif
 #include "pmic_auxadc.h"
 #endif /* end of #if PMIC_ACCDET_KERNEL */
+#include <linux/soc/mediatek/ocp96011-i2c.h>
 
 /********************grobal variable definitions******************/
 #if PMIC_ACCDET_CTP
@@ -3246,6 +3247,43 @@ static void delay_init_timerhandler(struct timer_list *t)
 			pr_info("%s inited dts fail\n", __func__);
 	}
 }
+
+#if defined(CONFIG_OCP96011_I2C)
+extern u32 ocp96011_get_headset_status(void);
+void typec_headphone_irq_handler(int state)
+{
+	u32 reg17 = ocp96011_get_headset_status();
+	switch (reg17)
+		{
+		//3hole-headset
+		case 0x2:
+			//cur_eint_state = !cur_eint_state;
+			//queue_work(eint_workqueue, &eint_work);
+			send_accdet_status_event(HEADSET_NO_MIC, state);
+			break;
+		//No audio accessory
+		case 0x0:
+			send_accdet_status_event(NO_DEVICE, state);
+			break;
+		//OMTP
+		case 0x8:
+		//CTIA
+		case 0x4:
+		//dio
+		case 0x1:
+		    if(cur_eint_state == EINT_PIN_PLUG_IN) {
+		        cur_eint_state = EINT_PIN_PLUG_OUT;
+	            } else {
+		        cur_eint_state = EINT_PIN_PLUG_IN;
+		        mod_timer(&micbias_timer,(jiffies + MICBIAS_DISABLE_TIMER));
+	            }
+	            queue_work(eint_workqueue, &eint_work);
+                    break;
+		}
+
+}
+EXPORT_SYMBOL(typec_headphone_irq_handler);
+#endif
 
 int mt_accdet_probe(struct platform_device *dev)
 {

@@ -2150,6 +2150,8 @@ page_owner=on loop.max_part=7";
 		phy-names = "port0_phy";
 		extcon = <&extcon_usb>;
 		dr_mode = "otg";
+		maximum-speed = "super-speed";
+		mediatek,usb3-drd;
 	};
 
 	xhci0:usb_xhci@11200000 {
@@ -5235,11 +5237,6 @@ page_owner=on loop.max_part=7";
 			ct = <0>;
 			part = <0>;
 		};
-		channel@2 {
-			type = <0>;
-			ct = <1>;
-			part = <0>;
-		};
 	};
 
 	smi_larb9: smi_larb9@1502e000 {
@@ -7431,8 +7428,8 @@ page_owner=on loop.max_part=7";
 		mediatek,audio-codec = <&mt6359_snd>;
 		mediatek,platform = <&afe>;
 		mediatek,snd_audio_dsp = <&snd_audio_dsp>;
-		mtk_spk_i2s_out = <3>;
-		mtk_spk_i2s_in = <0>;
+		mtk_spk_i2s_out = <1>;
+		mtk_spk_i2s_in = <2>;
 		/* mtk_spk_i2s_mck = <3>; */
 		mediatek,speaker-codec {
 			sound-dai = <&speaker_amp>;
@@ -7442,25 +7439,25 @@ page_owner=on loop.max_part=7";
 	/* feature : $enable $dl_mem $ul_mem $ref_mem $size */
 	snd_audio_dsp: snd_audio_dsp {
 		compatible = "mediatek,snd_audio_dsp";
-		mtk_dsp_voip = <0x1f 0xffffffff 0xffffffff 0xffffffff 0x30000>;
-		mtk_dsp_primary = <0x5 0xffffffff 0xffffffff \
+		mtk_dsp_voip = <0x0 0xffffffff 0xffffffff 0xffffffff 0x30000>;
+		mtk_dsp_primary = <0x0 0xffffffff 0xffffffff \
 				   0xffffffff 0x30000>;
-		mtk_dsp_offload = <0x1d 0xffffffff 0xffffffff \
+		mtk_dsp_offload = <0x0 0xffffffff 0xffffffff \
 				   0xffffffff 0x400000>;
-		mtk_dsp_deep = <0x5 0xffffffff 0xffffffff 0xffffffff 0x30000>;
-		mtk_dsp_playback = <0x1 0x4 0xffffffff 0x14 0x30000>;
-		mtk_dsp_music = <0x1 0xffffffff 0xffffffff 0xffffffff 0x0>;
-		mtk_dsp_capture1 = <0x1 0xffffffff 0xd 0x13 0x20000>;
-		mtk_dsp_a2dp = <0x1 0xffffffff 0xffffffff 0xffffffff 0x40000>;
+		mtk_dsp_deep = <0x0 0xffffffff 0xffffffff 0xffffffff 0x30000>;
+		mtk_dsp_playback = <0x0 0x4 0xffffffff 0x14 0x30000>;
+		mtk_dsp_music = <0x0 0xffffffff 0xffffffff 0xffffffff 0x0>;
+		mtk_dsp_capture1 = <0x0 0xffffffff 0xd 0x13 0x20000>;
+		mtk_dsp_a2dp = <0x0 0xffffffff 0xffffffff 0xffffffff 0x40000>;
 		mtk_dsp_dataprovider = <0x0 0xffffffff 0xf 0xffffffff 0x30000>;
-		mtk_dsp_call_final = <0x5 0x4 0x10 0x14 0x18000>;
-		mtk_dsp_fast = <0x5 0xffffffff 0xffffffff 0xffffffff 0x5000>;
-		mtk_dsp_ktv = <0x1 0x8 0x12 0xffffffff 0x10000>;
-		mtk_dsp_capture_raw = <0x1 0xffffffff 0xffffffff 0xffffffff 0x20000>;
-		mtk_dsp_fm = <0x1 0xffffffff 0x10 0xffffffff 0x10000>;
+		mtk_dsp_call_final = <0x0 0x4 0x10 0x14 0x18000>;
+		mtk_dsp_fast = <0x0 0xffffffff 0xffffffff 0xffffffff 0x5000>;
+		mtk_dsp_ktv = <0x0 0x8 0x12 0xffffffff 0x10000>;
+		mtk_dsp_capture_raw = <0x0 0xffffffff 0xffffffff 0xffffffff 0x20000>;
+		mtk_dsp_fm = <0x0 0xffffffff 0x10 0xffffffff 0x10000>;
 		mtk_dsp_ver = <0x1>;
-		swdsp_smartpa_process_enable = <0x5>;
-		mtk_dsp_mem_afe = <0x1 0x40000>; /* always enable */
+		swdsp_smartpa_process_enable = <0x0>;
+		mtk_dsp_mem_afe = <0x0 0x40000>; /* always enable */
 	};
 
 	audio_sram@11212000 {
@@ -7552,9 +7549,9 @@ page_owner=on loop.max_part=7";
 	charger: charger {
 		compatible = "mediatek,charger";
 		algorithm_name = "SwitchCharging2";
-		/* enable_sw_jeita; */
-		/* enable_pe_plus; */
-		/* enable_pe_2; */
+		enable_sw_jeita;
+		enable_pe_plus;
+		enable_pe_2;
 		/* enable_pe_3; */
 		/* enable_pe_4; */
 		enable_type_c;
@@ -7562,8 +7559,8 @@ page_owner=on loop.max_part=7";
 		enable_dynamic_mivr;
 
 		/* common */
-		battery_cv = <4350000>;
-		max_charger_voltage = <6500000>;
+		battery_cv = <4450000>;
+		max_charger_voltage = <11000000>;
 		min_charger_voltage = <4600000>;
 
 		/* dynamic mivr */
@@ -7582,23 +7579,23 @@ page_owner=on loop.max_part=7";
 		charging_host_charger_current = <1500000>;
 		apple_1_0a_charger_current = <650000>;
 		apple_2_1a_charger_current = <800000>;
-		ta_ac_charger_current = <3000000>;
+		ta_ac_charger_current = <3700000>;
 
 		/* sw jeita */
-		jeita_temp_above_t4_cv = <4240000>;
-		jeita_temp_t3_to_t4_cv = <4240000>;
-		jeita_temp_t2_to_t3_cv = <4340000>;
-		jeita_temp_t1_to_t2_cv = <4240000>;
-		jeita_temp_t0_to_t1_cv = <4040000>;
-		jeita_temp_below_t0_cv = <4040000>;
+		jeita_temp_above_t4_cv = <4200000>;
+		jeita_temp_t3_to_t4_cv = <4200000>;
+		jeita_temp_t2_to_t3_cv = <4450000>;
+		jeita_temp_t1_to_t2_cv = <4450000>;
+		jeita_temp_t0_to_t1_cv = <4450000>;
+		jeita_temp_below_t0_cv = <4450000>;
 		temp_t4_thres = <50>;
-		temp_t4_thres_minus_x_degree = <47>;
+		temp_t4_thres_minus_x_degree = <48>;
 		temp_t3_thres = <45>;
-		temp_t3_thres_minus_x_degree = <39>;
-		temp_t2_thres = <10>;
+		temp_t3_thres_minus_x_degree = <44>;
+		temp_t2_thres = <15>;
 		temp_t2_thres_plus_x_degree = <16>;
 		temp_t1_thres = <0>;
-		temp_t1_thres_plus_x_degree = <6>;
+		temp_t1_thres_plus_x_degree = <2>;
 		temp_t0_thres = <0>;
 		temp_t0_thres_plus_x_degree = <0>;
 		temp_neg_10_thres = <0>;
@@ -7606,9 +7603,9 @@ page_owner=on loop.max_part=7";
 		/* battery temperature protection */
 		enable_min_charge_temp;
 		min_charge_temp = <0>;
-		min_charge_temp_plus_x_degree = <6>;
+		min_charge_temp_plus_x_degree = <2>;
 		max_charge_temp = <50>;
-		max_charge_temp_minus_x_degree = <47>;
+		max_charge_temp_minus_x_degree = <48>;
 
 		/* PE */
 		ta_12v_support;
@@ -8139,8 +8136,38 @@ page_owner=on loop.max_part=7";
 	aud_gpio_i2s1_on: aud_gpio_i2s1_on {
 	};
 	aud_gpio_i2s2_off: aud_gpio_i2s2_off {
+		pins_cmd1_dat {
+			pinmux = <PINMUX_GPIO110__FUNC_GPIO110>;
+			input-enable;
+			bias-pull-down;
+		};
+		pins_cmd2_dat {
+			pinmux = <PINMUX_GPIO111__FUNC_GPIO111>;
+			input-enable;
+			bias-pull-down;
+		};
+		pins_cmd3_dat {
+			pinmux = <PINMUX_GPIO112__FUNC_GPIO112>;
+			input-enable;
+			bias-pull-down;
+		};
 	};
 	aud_gpio_i2s2_on: aud_gpio_i2s2_on {
+		pins_cmd1_dat {
+			pinmux = <PINMUX_GPIO110__FUNC_I2S2_BCK>;
+			input-schmitt-enable;
+			bias-disable;
+		};
+		pins_cmd2_dat {
+			pinmux = <PINMUX_GPIO111__FUNC_I2S2_LRCK>;
+			input-schmitt-enable;
+			bias-disable;
+		};
+		pins_cmd3_dat {
+			pinmux = <PINMUX_GPIO112__FUNC_I2S2_DI>;
+			input-schmitt-enable;
+			bias-disable;
+		};
 	};
 	aud_gpio_i2s3_off: aud_gpio_i2s3_off {
 		pins_cmd1_dat {

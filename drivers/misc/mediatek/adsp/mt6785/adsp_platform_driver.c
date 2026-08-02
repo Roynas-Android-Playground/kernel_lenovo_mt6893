@@ -153,7 +153,6 @@ int adsp_core0_suspend(void)
 			ret = -EPIPE;
 			goto ERROR;
 		}
-		set_adsp_state(pdata, ADSP_SUSPENDING);
 
 		/* wait core suspend ack timeout 2s */
 		ret = wait_for_completion_timeout(&pdata->done, 2 * HZ);
@@ -222,7 +221,7 @@ int adsp_core0_resume(void)
 void adsp_logger_init0_cb(struct work_struct *ws)
 {
 	int ret;
-	unsigned int info[6];
+	uint64_t info[6];
 
 	info[0] = adsp_get_reserve_mem_phys(ADSP_A_LOGGER_MEM_ID);
 	info[1] = adsp_get_reserve_mem_size(ADSP_A_LOGGER_MEM_ID);
@@ -400,7 +399,8 @@ static int adsp_core_drv_probe(struct platform_device *pdev)
 	pdata->irq[ADSP_IRQ_WDT_ID].seq = platform_get_irq(pdev, 0);
 	pdata->irq[ADSP_IRQ_WDT_ID].clear_irq = adsp_mt_disable_wdt;
 	pdata->irq[ADSP_IRQ_IPC_ID].seq = platform_get_irq(pdev, 1);
-	pdata->irq[ADSP_IRQ_IPC_ID].clear_irq = adsp_mt_clr_sysirq;
+	/* adsp_ipi clr irq by itself */
+	/* pdata->irq[ADSP_IRQ_IPC_ID].clear_irq = adsp_mt_clr_sysirq; */
 
 	of_property_read_u32(dev->of_node, "sysram", &temp);
 	pdata->sysram_phys = (phys_addr_t)temp;

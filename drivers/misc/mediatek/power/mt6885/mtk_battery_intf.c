@@ -17,6 +17,8 @@
 #include <mtk_gauge_class.h>
 #include <mtk_battery_internal.h>
 
+#define MTK_ENABLE_BQ27541
+
 #ifdef CONFIG_CUSTOM_BATTERY_EXTERNAL_CHANNEL
 #include <custome_external_battery.h>
 #endif
@@ -95,6 +97,20 @@ signed int battery_get_bat_current(void)
 	int curr_val;
 	bool is_charging;
 
+#ifdef MTK_ENABLE_BQ27541
+	union power_supply_propval value;
+
+	/* get battery current from external "battery" power supply if support */
+	struct power_supply *bq_psy = power_supply_get_by_name("bq27541");
+
+	if (bq_psy) {
+		power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_CURRENT_NOW, &value);
+		printk("%s:get bq_psy success, bat_current(%d)\n",__func__, value.intval);
+
+		return value.intval;
+	}
+#endif
+
 	is_charging = gauge_get_current(&curr_val);
 	if (is_charging == false)
 		curr_val = 0 - curr_val;
@@ -108,6 +124,20 @@ signed int battery_get_bat_current_mA(void)
 
 signed int battery_get_soc(void)
 {
+
+#ifdef MTK_ENABLE_BQ27541
+	union power_supply_propval value;
+
+	/* get battery soc from external "battery" power supply if support */
+	struct power_supply *bq_psy = power_supply_get_by_name("bq27541");
+
+	if (bq_psy) {
+		power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_CAPACITY, &value);
+		pr_info("s:get bq_psy success, soc(%d)\n",__func__, value.intval);
+
+		return value.intval;
+	}
+#endif
 	if (get_mtk_battery() != NULL)
 		return get_mtk_battery()->soc;
 	else
@@ -116,6 +146,10 @@ signed int battery_get_soc(void)
 
 signed int battery_get_uisoc(void)
 {
+#ifdef MTK_ENABLE_BQ27541
+		union power_supply_propval value;
+		struct power_supply *bq_psy = power_supply_get_by_name("bq27541");
+#endif
 	int boot_mode = get_boot_mode();
 
 	if ((boot_mode == META_BOOT) ||
@@ -123,15 +157,44 @@ signed int battery_get_uisoc(void)
 		(boot_mode == FACTORY_BOOT) ||
 		(boot_mode == ATE_FACTORY_BOOT))
 		return 75;
+
+	/* get battery ui_soc from external "battery" power supply if support */
+#ifdef MTK_ENABLE_BQ27541
+	if (bq_psy) {
+		power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_CAPACITY, &value);
+		pr_info("%s:get bq_psy success, ui_soc(%d)\n",__func__, value.intval);
+		return value.intval;
+	}
+#endif
+
 	if (get_mtk_battery() != NULL)
 		return get_mtk_battery()->ui_soc;
 	else
 		return 50;
 }
+extern int fake_temp;
 
 signed int battery_get_bat_temperature(void)
 {
+#ifdef MTK_ENABLE_BQ27541
+	union power_supply_propval value;
+	struct power_supply *bq_psy = power_supply_get_by_name("bq27541");
+#endif
 	/* TODO */
+	if (fake_temp)
+		return fake_temp/10;
+
+	/* get battery temperature  from external "battery" power supply if support */
+#ifdef MTK_ENABLE_BQ27541
+	if (bq_psy) {
+		power_supply_get_property(bq_psy, POWER_SUPPLY_PROP_TEMP, &value);
+		pr_info("%s:get bq_psy success, temp(%d)\n",__func__, value.intval);
+		if (value.intval >= 100)
+			value.intval /= 10;
+
+		return value.intval;
+	}
+#endif
 	if (is_battery_init_done())
 		return force_get_tbat(true);
 	else

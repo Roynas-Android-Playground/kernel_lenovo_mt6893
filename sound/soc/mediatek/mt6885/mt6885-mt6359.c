@@ -24,6 +24,30 @@
  */
 #define EXT_SPK_AMP_W_NAME "Ext_Speaker_Amp"
 
+static struct snd_soc_dai_link_component cs35l43_codec[] = {
+	{
+		.name = "cs35l43.6-0040",
+		.dai_name = "cs35l43-pcm",
+	},
+	{
+		.name = "cs35l43.6-0041",
+		.dai_name = "cs35l43-pcm",
+	},
+	{
+		.name = "cs35l43.3-0042",
+		.dai_name = "cs35l43-pcm",
+	},
+	{
+		.name = "cs35l43.3-0043",
+		.dai_name = "cs35l43-pcm",
+	},
+
+};
+static int cirrus_prince_devs=4;
+static struct snd_soc_codec_conf *mt_prince_codec_conf;
+
+extern const struct snd_soc_ops cirrus_amp_ops;
+extern int cs35l41_snd_init(struct snd_soc_pcm_runtime *rtd);
 static const char *const mt6885_spk_type_str[] = {MTK_SPK_NOT_SMARTPA_STR,
 						  MTK_SPK_RICHTEK_RT5509_STR,
 						  MTK_SPK_MEDIATEK_MT6660_STR,
@@ -617,8 +641,12 @@ static struct snd_soc_dai_link mt6885_mt6359_dai_links[] = {
 		.name = "Playback_HDMI",
 		.stream_name = "Playback_HDMI",
 		.cpu_dai_name = "HDMI",
+		//.codecs = cs35l43_codec,
+		//.num_codecs = ARRAY_SIZE(cs35l43_codec),
 		.codec_name = "snd-soc-dummy",
 		.codec_dai_name = "snd-soc-dummy-dai",
+		//.codec_name = "cs35l43.6-0040",
+		//.codec_dai_name = "cs35l43-pcm",
 		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
 			    SND_SOC_DPCM_TRIGGER_PRE},
 		.dynamic = 1,
@@ -770,6 +798,8 @@ static struct snd_soc_dai_link mt6885_mt6359_dai_links[] = {
 		.cpu_dai_name = "I2S3",
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
+		//.codecs = cs35l43_codec,
+		//.num_codecs = ARRAY_SIZE(cs35l43_codec),
 		.no_pcm = 1,
 		.dpcm_playback = 1,
 		.ignore_suspend = 1,
@@ -798,8 +828,13 @@ static struct snd_soc_dai_link mt6885_mt6359_dai_links[] = {
 	{
 		.name = "I2S2",
 		.cpu_dai_name = "I2S2",
+#ifdef CONFIG_SND_SOC_ES7243E
+		.codec_dai_name = "ES7243E HiFi 0",
+		.codec_name = "es7243e.3-0010",
+#else
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
+#endif
 		.no_pcm = 1,
 		.dpcm_capture = 1,
 		.ignore_suspend = 1,
@@ -927,11 +962,17 @@ static struct snd_soc_dai_link mt6885_mt6359_dai_links[] = {
 	{
 		.name = "TDM",
 		.cpu_dai_name = "TDM",
-		.codec_name = "snd-soc-dummy",
-		.codec_dai_name = "snd-soc-dummy-dai",
+		//.codec_name = "snd-soc-dummy",
+		//.codec_dai_name = "snd-soc-dummy-dai",
+		.codecs = cs35l43_codec,
+		.num_codecs = ARRAY_SIZE(cs35l43_codec),
+		//.codec_name = "cs35l43.6-0041",
+		//.codec_dai_name = "cs35l43-pcm",
+		.init = cs35l41_snd_init,
 		.no_pcm = 1,
 		.dpcm_playback = 1,
 		.ignore_suspend = 1,
+		.ops= &cirrus_amp_ops,
 	},
 	{
 		.name = "TDM_DPTX",
@@ -1166,7 +1207,10 @@ static int mt6885_mt6359_dev_probe(struct platform_device *pdev)
 	int ret, i;
 	int spk_out_dai_link_idx, spk_iv_dai_link_idx;
 	const char *name;
-
+	
+	struct device_node *prince_codec_of_node;
+	const char *prince_name_prefix = NULL;
+	
 	ret = mtk_spk_update_info(card, pdev,
 				  &spk_out_dai_link_idx, &spk_iv_dai_link_idx,
 				  &mt6885_mt6359_i2s_ops);
@@ -1238,14 +1282,52 @@ static int mt6885_mt6359_dev_probe(struct platform_device *pdev)
 	for (i = 0; i < card->num_links; i++) {
 		if (mt6885_mt6359_dai_links[i].codec_name ||
 		    i == spk_out_dai_link_idx ||
-		    i == spk_iv_dai_link_idx)
+		    i == spk_iv_dai_link_idx || 
+		    mt6885_mt6359_dai_links[i].num_codecs)
 			continue;
 		mt6885_mt6359_dai_links[i].codec_of_node = codec_node;
 	}
 
 	card->dev = &pdev->dev;
+	/*==========================test====================*/
+	
+		/* Alloc prince array of codec conf struct */
+	dev_info(&pdev->dev,
+				"%s: Default card num_configs = %d\n", __func__, card->num_configs);
+	mt_prince_codec_conf = devm_kcalloc(&pdev->dev,
+		card->num_configs + cirrus_prince_devs,
+		sizeof(struct snd_soc_codec_conf), GFP_KERNEL);
+	if (!mt_prince_codec_conf) {
+		ret = -ENOMEM;
+		return ret;
+	}
+	
+	for (i = 0; i < cirrus_prince_devs; i++) {
+		prince_codec_of_node = of_parse_phandle(pdev->dev.of_node,
+			"cirrus,prince-devs", i);
+		ret = of_property_read_string_index(pdev->dev.of_node,
+			"cirrus,prince-dev-prefix", i, &prince_name_prefix);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"%s: failed to read prince dev prefix, ret = %d\n", __func__, ret);
+				ret = -EINVAL;
+				return ret;
+		}
+		dev_info(&pdev->dev,
+			"%s: prince_dev prefix[%d] = %s\n", __func__, i, prince_name_prefix);
 
+		mt_prince_codec_conf[card->num_configs + i].dev_name = NULL;
+		mt_prince_codec_conf[card->num_configs + i].of_node = prince_codec_of_node;
+		//mt_prince_codec_conf[card->num_configs + i].name_prefix = prince_name_prefix[0];
+		mt_prince_codec_conf[card->num_configs + i].name_prefix = prince_name_prefix;
+		dev_info(&pdev->dev, "%s: mt_prince_codec_conf name_prefix[%d] = %s\n", __func__,
+				i, mt_prince_codec_conf[card->num_configs + i].name_prefix);
+	}
+
+	card->num_configs += cirrus_prince_devs;
+	card->codec_conf = mt_prince_codec_conf;
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
+	/*==========================test====================*/
 	if (ret)
 		dev_err(&pdev->dev, "%s snd_soc_register_card fail %d\n",
 			__func__, ret);

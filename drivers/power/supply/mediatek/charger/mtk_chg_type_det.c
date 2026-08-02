@@ -53,6 +53,8 @@
 
 #include "mtk_charger_intf.h"
 
+int typec_cc_orientation = 0;//yds
+int p537_usb_speed = 0;//yds
 #ifdef CONFIG_EXTCON_USB_CHG
 struct usb_extcon_info {
 	struct device *dev;
@@ -160,6 +162,17 @@ struct mt_charger {
 	enum charger_type chg_type;
 };
 
+static int psy_charger_type_property_is_writeable(struct power_supply *psy,
+						enum power_supply_property psp)
+{
+	switch (psp) {
+		case POWER_SUPPLY_PROP_SHIPPING_MODE:
+			return 1;
+		default :
+			return 0;
+	}
+}
+
 static int mt_charger_online(struct mt_charger *mtk_chg)
 {
 	int ret = 0;
@@ -196,6 +209,9 @@ static int mt_charger_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_TYPE:
 		val->intval = mtk_chg->chg_type;
 		break;
+	case POWER_SUPPLY_PROP_SHIPPING_MODE:
+		val->intval = 0;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -218,6 +234,9 @@ static void usb_extcon_detect_cable(struct work_struct *work)
 }
 #endif
 
+extern struct mt6360_pmu_chg_info *g_mpci;
+extern int mt6360_set_shipping_mode(struct mt6360_pmu_chg_info *mpci);
+
 static int mt_charger_set_property(struct power_supply *psy,
 	enum power_supply_property psp, const union power_supply_propval *val)
 {
@@ -226,6 +245,7 @@ static int mt_charger_set_property(struct power_supply *psy,
 	#ifdef CONFIG_EXTCON_USB_CHG
 	struct usb_extcon_info *info;
 	#endif
+	int ret;
 
 	pr_info("%s\n", __func__);
 
@@ -253,6 +273,16 @@ static int mt_charger_set_property(struct power_supply *psy,
 			charger_manager_force_disable_power_path(
 				cti->chg_consumer, MAIN_CHARGER, true);
 		break;
+	case POWER_SUPPLY_PROP_SHIPPING_MODE:
+		printk("%s: POWER_SUPPLY_PROP_SHIPPING_MODE:[%d]\n",__func__,val->intval);
+		if (val->intval == 1) {
+			ret = mt6360_set_shipping_mode(g_mpci);
+			if (ret < 0)
+				printk("%s: set shipping mode fail\n",__func__);
+			else
+				printk("%s: set shipping mode done\n",__func__);
+		}
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -331,6 +361,12 @@ static int mt_usb_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		val->intval = 5000000;
 		break;
+	case POWER_SUPPLY_PROP_TYPEC_CC_ORIENTATION:
+		val->intval =typec_cc_orientation;
+		break;
+	case POWER_SUPPLY_PROP_P537_USB_SPEED:
+		val->intval =p537_usb_speed;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -340,6 +376,7 @@ static int mt_usb_get_property(struct power_supply *psy,
 
 static enum power_supply_property mt_charger_properties[] = {
 	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_SHIPPING_MODE,
 };
 
 static enum power_supply_property mt_ac_properties[] = {
@@ -350,6 +387,8 @@ static enum power_supply_property mt_usb_properties[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
+	POWER_SUPPLY_PROP_TYPEC_CC_ORIENTATION,//yds
+	 POWER_SUPPLY_PROP_P537_USB_SPEED,//yds
 };
 
 static void tcpc_power_off_work_handler(struct work_struct *work)
@@ -555,6 +594,8 @@ static int mt_charger_probe(struct platform_device *pdev)
 	mt_chg->chg_desc.num_properties = ARRAY_SIZE(mt_charger_properties);
 	mt_chg->chg_desc.set_property = mt_charger_set_property;
 	mt_chg->chg_desc.get_property = mt_charger_get_property;
+	mt_chg->chg_desc.property_is_writeable =
+				psy_charger_type_property_is_writeable;
 	mt_chg->chg_cfg.drv_data = mt_chg;
 
 	mt_chg->ac_desc.name = "ac";

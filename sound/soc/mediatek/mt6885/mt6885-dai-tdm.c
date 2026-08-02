@@ -75,11 +75,11 @@ static unsigned int get_tdm_channel_bck(snd_pcm_format_t format)
 	return snd_pcm_format_physical_width(format) <= 16 ?
 	       TDM_CHANNEL_BCK_16 : TDM_CHANNEL_BCK_32;
 }
-
+/*
 static unsigned int get_tdm_lrck_width(snd_pcm_format_t format)
 {
 	return snd_pcm_format_physical_width(format) - 1;
-}
+}*/
 
 static unsigned int get_tdm_ch(unsigned int ch)
 {
@@ -371,6 +371,7 @@ static const struct snd_soc_dapm_widget mtk_dai_tdm_widgets[] = {
 
 	SND_SOC_DAPM_MUX("HDMI_OUT_MUX", SND_SOC_NOPM, 0, 0,
 			 &hdmi_out_mux_control),
+	SND_SOC_DAPM_OUTPUT("HDMI_DUMMY_OUT"),
 	SND_SOC_DAPM_MUX("DPTX_OUT_MUX", SND_SOC_NOPM, 0, 0,
 			 &dptx_out_mux_control),
 
@@ -511,6 +512,7 @@ static const struct snd_soc_dapm_route mtk_dai_tdm_routes[] = {
 	{"DPTX_OUT_MUX", "Connect", "HDMI_CH7_MUX"},
 
 	{"TDM", NULL, "HDMI_OUT_MUX"},
+	{"HDMI_DUMMY_OUT", NULL, "TDM"},
 	{"TDM", NULL, "aud_tdm_clk"},
 	{"TDM", NULL, "TDM_BCK"},
 
@@ -595,13 +597,14 @@ static int mtk_dai_tdm_hw_params(struct snd_pcm_substream *substream,
 
 	/* set tdm */
 	tdm_con = 1 << BCK_INVERSE_SFT;
-	tdm_con |= 1 << LRCK_INVERSE_SFT;
+	tdm_con |= 0 << LRCK_INVERSE_SFT;
 	tdm_con |= 1 << DELAY_DATA_SFT;
 	tdm_con |= 1 << LEFT_ALIGN_SFT;
 	tdm_con |= get_tdm_wlen(format) << WLEN_SFT;
 	tdm_con |= get_tdm_ch(channels) << CHANNEL_NUM_SFT;
 	tdm_con |= get_tdm_channel_bck(format) << CHANNEL_BCK_CYCLES_SFT;
-	tdm_con |= get_tdm_lrck_width(format) << LRCK_TDM_WIDTH_SFT;
+	//tdm_con |= get_tdm_lrck_width(format) << LRCK_TDM_WIDTH_SFT;
+	tdm_con |= 0 << LRCK_TDM_WIDTH_SFT;
 	regmap_write(afe->regmap, AFE_TDM_CON1, tdm_con);
 
 	/* set dptx */
@@ -629,7 +632,8 @@ static int mtk_dai_tdm_hw_params(struct snd_pcm_substream *substream,
 		case 3:
 		case 4:
 			tdm_con = TDM_CH_START_O30_O31 << ST_CH_PAIR_SOUT0_SFT;
-			tdm_con |= TDM_CH_START_O32_O33 << ST_CH_PAIR_SOUT1_SFT;
+			//tdm_con |= TDM_CH_START_O32_O33 << ST_CH_PAIR_SOUT1_SFT;
+			tdm_con |= TDM_CH_ZERO << ST_CH_PAIR_SOUT1_SFT;
 			tdm_con |= TDM_CH_ZERO << ST_CH_PAIR_SOUT2_SFT;
 			tdm_con |= TDM_CH_ZERO << ST_CH_PAIR_SOUT3_SFT;
 			break;
@@ -656,7 +660,10 @@ static int mtk_dai_tdm_hw_params(struct snd_pcm_substream *substream,
 	regmap_update_bits(afe->regmap, AFE_HDMI_OUT_CON0,
 			   HDMI_CH_NUM_MASK_SFT,
 			   channels << HDMI_CH_NUM_SFT);
+//add for tdm bck inverse
+	regmap_write(afe->regmap, AUDIO_TOP_CON3, 0X6000000C);
 	return 0;
+
 }
 
 static int mtk_dai_tdm_trigger(struct snd_pcm_substream *substream,

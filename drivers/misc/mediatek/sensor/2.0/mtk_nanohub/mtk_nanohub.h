@@ -204,6 +204,13 @@ struct sar_event_t {
 	uint32_t status;
 };
 
+struct als_event_t {
+	struct {
+		int32_t data[3];
+	};
+	uint32_t status;
+};
+
 enum activity_type_t {
 	STILL,
 	STANDING,
@@ -260,6 +267,7 @@ struct data_unit_t {
 		struct in_pocket_event_t inpocket_event;
 		struct geofence_event_t geofence_data_t;
 		struct sar_event_t sar_event;
+		struct als_event_t als_event;
 		int32_t data[8];
 	};
 } __packed;

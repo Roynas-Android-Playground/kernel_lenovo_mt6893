@@ -36,6 +36,12 @@
 
 #define unk	KEY_UNKNOWN
 
+struct input_dev *kb_input_dev=NULL;
+struct input_dev *mouse_input_dev=NULL;
+extern int screen_is_black;
+extern int kb_connect_status;
+void report_power_key(void);
+
 static const unsigned char hid_keyboard[256] = {
 	  0,  0,  0,  0, 30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38,
 	 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45, 21, 44,  2,  3,
@@ -1004,6 +1010,13 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x221: map_key_clear(KEY_SEARCH);		break;
 		case 0x222: map_key_clear(KEY_GOTO);		break;
 		case 0x223: map_key_clear(KEY_HOMEPAGE);	break;
+		/*keyboard custom button start*/
+		case 0x391: map_key_clear(KEY_MICDISABLE);	break;
+		case 0x394: map_key_clear(KEY_FULLSCREEN);	break;
+		case 0x395: map_key_clear(KEY_SPLITSCREEN);	break;
+		case 0x38e: map_key_clear(KEY_LOCKSCREEN);	break;
+		case 0x390: map_key_clear(KEY_SWITCHLANGUAGE);	break;
+		/*keyboard custom button end*/
 		case 0x224: map_key_clear(KEY_BACK);		break;
 		case 0x225: map_key_clear(KEY_FORWARD);		break;
 		case 0x226: map_key_clear(KEY_STOP);		break;
@@ -1316,6 +1329,14 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 	    (!test_bit(usage->code, input->key)) == value)
 		input_event(input, EV_MSC, MSC_SCAN, usage->hid);
 
+	if(screen_is_black == 1){
+		if(usage->code!=KEY_COFFEE){
+			report_power_key();
+			screen_is_black = 0;
+			return;
+		}
+	}
+
 	input_event(input, usage->type, usage->code, value);
 
 	if ((field->flags & HID_MAIN_ITEM_RELATIVE) &&
@@ -1442,6 +1463,17 @@ static void hidinput_led_worker(struct work_struct *work)
 		hid_hw_raw_request(hid, report->id, buf, len, HID_OUTPUT_REPORT,
 				HID_REQ_SET_REPORT);
 	kfree(buf);
+}
+
+void hidinput_connection_worker(struct work_struct *work)
+{
+	struct hid_device *hid = container_of(work, struct hid_device, connection_work.work);
+	printk(KERN_DEBUG "hidinput connection work start,vendor:0x%x,input_register=%d,kb_connect_status=%d\n",hid->vendor,hid->input_registered,kb_connect_status);
+	if (!hid->input_registered && kb_connect_status) {
+		hidinput_connect(hid,0);
+	} else if (hid->input_registered && !kb_connect_status) {
+		hidinput_disconnect(hid);
+	}
 }
 
 static int hidinput_input_event(struct input_dev *dev, unsigned int type,
@@ -1629,12 +1661,54 @@ static inline void hidinput_configure_usages(struct hid_input *hidinput,
 						 report->field[i]->usage + j);
 }
 
+void report_power_key()
+{
+	printk(KERN_DEBUG "zzz-report_power_key");
+	input_report_key(kb_input_dev, KEY_POWER, 1);
+	input_sync(kb_input_dev);
+	input_report_key(kb_input_dev, KEY_POWER, 0);
+	input_sync(kb_input_dev);
+}
 /*
  * Register the input device; print a message.
  * Configure the input layer interface
  * Read all reports and initialize the absolute field values.
  */
+int register_kb_wakeup_devices(void)
+{
+	printk(KERN_DEBUG "==keyboard register_report_power_key==");
+	kb_input_dev = input_allocate_device();
+	if(kb_input_dev==NULL){
+		printk(KERN_ERR "failed to allocate keyboard report_power_key device");
+		return -1;
+	}
+	input_set_capability(kb_input_dev, EV_KEY, KEY_POWER);
+	kb_input_dev->name="keyboard_wakeup_devices";
+	if (input_register_device(kb_input_dev)){
+		printk(KERN_ERR "failed to register keyboard report_power_key device");
+		return -1;
+	}
+	return 0;
 
+}
+
+int register_mouse_wakeup_devices(void)
+{
+	printk(KERN_DEBUG "==mouse register_report_power_key==");
+	mouse_input_dev = input_allocate_device();
+	if(mouse_input_dev==NULL){
+		printk(KERN_ERR "failed to allocate mouse_wakeup_devices device");
+		return -1;
+	}
+	input_set_capability(mouse_input_dev, EV_KEY, KEY_POWER);
+	mouse_input_dev->name="mouse_wakeup_devices";
+	if (input_register_device(mouse_input_dev)){
+		printk(KERN_ERR "failed to register  mouse_wakeup_devices device");
+		return -1;
+	}
+	return 0;
+
+}
 int hidinput_connect(struct hid_device *hid, unsigned int force)
 {
 	struct hid_driver *drv = hid->driver;
@@ -1710,7 +1784,7 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 		hid_err(hid, "No inputs registered, leaving\n");
 		goto out_unwind;
 	}
-
+	hid->input_registered = true;
 	return 0;
 
 out_unwind:
@@ -1741,6 +1815,7 @@ void hidinput_disconnect(struct hid_device *hid)
 	 * know that led_work will never get restarted, so we can cancel it
 	 * synchronously and are safe. */
 	cancel_work_sync(&hid->led_work);
+	hid->input_registered = false;
 }
 EXPORT_SYMBOL_GPL(hidinput_disconnect);
 

@@ -172,7 +172,11 @@ int hpf_get_power_leakage(void)
 	unsigned int leakage_cpu = 0, leakage_gpu = 0;
 
 	leakage_cpu = mt_ppm_get_leakage_mw(TOTAL_CLUSTER_LKG);
-	leakage_gpu = mt_gpufreq_get_leakage_mw();
+	/*Modify for KE*/
+	if(!mt_gpufreq_not_ready())
+	{
+		leakage_gpu = mt_gpufreq_get_leakage_mw();
+	}
 	hpfmgr->loading_leakage = leakage_cpu + leakage_gpu;
 
 	if (mt_pbm_debug)
@@ -330,7 +334,7 @@ multiple, cpu_lower_bound);
 	} else {
 		if (((abs(pre_tocpu - tocpu) >= 100) && cpu > tocpu) ||
 			((abs(pre_togpu - togpu) >= 30) && gpu > togpu)) {
-			pr_info
+			pr_info_ratelimited
 ("(C/G)=%d,%d=> (D/L/M1/F/C/G)=%d,%d,%d,%d,%d,%d(Multi:%d),%d\n",
 cpu, gpu, dlpt, leakage, md1, flash, tocpu, togpu,
 multiple, cpu_lower_bound);

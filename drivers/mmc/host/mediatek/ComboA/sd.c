@@ -51,6 +51,8 @@
 #include <mmc/core/queue.h>
 #include <mmc/core/mmc_ops.h>
 #include "mmc/host/cqhci-crypto.h"
+#include <linux/mmc/slot-gpio.h>
+#include <mmc/host/sdhci.h>
 
 #ifdef MTK_MSDC_BRINGUP_DEBUG
 //#include <mach/mt_pmic_wrap.h>
@@ -471,9 +473,12 @@ int msdc_clk_stable(struct msdc_host *host, u32 mode, u32 div,
 		if (retry == 0) {
 			pr_info("msdc%d on clock failed ===> retry twice\n",
 				host->id);
-
+			if (lock)
+				spin_unlock(&host->lock);
 			msdc_clk_disable_unprepare(host);
 			msdc_clk_prepare_enable(host);
+			if (lock)
+				spin_lock(&host->lock);
 			msdc_dump_info(NULL, 0, NULL, host->id);
 			host->prev_cmd_cause_dump = 0;
 		}
@@ -2240,10 +2245,10 @@ int msdc_pio_read(struct msdc_host *host, struct mmc_data *data)
 
 		for (i = 0; i < totalpages; i++) {
 			kaddr[i] = (ulong) kmap(hmpage + i);
-			if ((i > 0) && ((kaddr[i] - kaddr[i - 1]) != PAGE_SIZE))
-				flag = 1;
 			if (!kaddr[i])
 				ERR_MSG("msdc0:kmap failed %lx", kaddr[i]);
+			if ((i > 0) && ((kaddr[i] - kaddr[i - 1]) != PAGE_SIZE))
+				flag = 1;
 		}
 
 		ptr = sg_virt(sg);
@@ -2441,10 +2446,10 @@ int msdc_pio_write(struct msdc_host *host, struct mmc_data *data)
 		/* Kmap all need pages, */
 		for (i = 0; i < totalpages; i++) {
 			kaddr[i] = (ulong) kmap(hmpage + i);
-			if ((i > 0) && ((kaddr[i] - kaddr[i - 1]) != PAGE_SIZE))
-				flag = 1;
 			if (!kaddr[i])
 				ERR_MSG("msdc0:kmap failed %lx\n", kaddr[i]);
+			if ((i > 0) && ((kaddr[i] - kaddr[i - 1]) != PAGE_SIZE))
+				flag = 1;
 		}
 
 		ptr = sg_virt(sg);
@@ -3159,6 +3164,7 @@ int msdc_do_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	unsigned int left = 0;
 	int ret = 0;
 	unsigned long pio_tmo;
+	int lock = spin_is_locked(&host->lock);
 
 	#ifndef SDIO_EARLY_SETTING_RESTORE
 	if (is_card_sdio(host) || (host->hw->flags & MSDC_SDIO_IRQ))
@@ -3273,8 +3279,12 @@ int msdc_do_request(struct mmc_host *mmc, struct mmc_request *mrq)
 			pr_debug("[%s]: start pio read\n", __func__);
 #endif
 			if (msdc_pio_read(host, data)) {
+				if (lock)
+					spin_unlock(&host->lock);
 				msdc_clk_disable_unprepare(host);
 				msdc_clk_enable_and_stable(host);
+				if (lock)
+					spin_lock(&host->lock);
 				goto stop;      /* need cmd12 */
 			}
 		} else {
@@ -3282,8 +3292,12 @@ int msdc_do_request(struct mmc_host *mmc, struct mmc_request *mrq)
 			pr_debug("[%s]: start pio write\n", __func__);
 #endif
 			if (msdc_pio_write(host, data)) {
+				if (lock)
+					spin_unlock(&host->lock);
 				msdc_clk_disable_unprepare(host);
 				msdc_clk_enable_and_stable(host);
+				if (lock)
+					spin_lock(&host->lock);
 				goto stop;
 			}
 
@@ -5130,6 +5144,41 @@ static void msdc_dvfs_kickoff(struct work_struct *work)
 {
 }
 
+/* add sdcard slot info for factory mode ----begin*/
+static struct kobject *card_slot_device = NULL;
+static struct msdc_host *card_host =NULL;
+
+static ssize_t card_slot_status_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", mmc_gpio_get_cd(card_host->mmc));
+}
+
+static DEVICE_ATTR(card_slot_status, S_IRUGO ,
+			card_slot_status_show, NULL);
+
+int32_t card_slot_init_device_name(void)
+{
+	int32_t error = 0;
+	if(card_slot_device != NULL){
+		pr_err("card_slot already created\n");
+		return 0;
+	}
+	card_slot_device = kobject_create_and_add("card_slot", NULL);
+	if (card_slot_device == NULL) {
+		printk("%s: card_slot register failed\n", __func__);
+		error = -ENOMEM;
+		return error ;
+	}
+	error = sysfs_create_file(card_slot_device, &dev_attr_card_slot_status.attr);
+	if (error) {
+		printk("%s: card_slot card_slot_status_create_file failed\n", __func__);
+		kobject_del(card_slot_device);
+	}
+	return 0 ;
+}
+
+/* add sdcard slot info for factory mode -----end */
 #ifdef CONFIG_MTK_EMMC_HW_CQ
 static void msdc_cqhci_post_cqe_halt(struct mmc_host *mmc)
 {
@@ -5470,7 +5519,10 @@ static int msdc_drv_probe(struct platform_device *pdev)
 		__func__, host->id, mmc->caps, mmc->caps2);
 	msdc_dump_clock_sts(NULL, 0, NULL, host);
 #endif
-
+	/* add sdcard slot info for factory mode ----begin*/
+	card_host = dev_get_drvdata(&pdev->dev);
+	card_slot_init_device_name();
+	/* add sdcard slot info for factory mode ----begin*/
 	if (host->hw->host_function == MSDC_EMMC)
 		msdc_debug_proc_init_bootdevice();
 

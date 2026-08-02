@@ -648,7 +648,7 @@ static void *vcu_check_gce_pa_base(struct mtk_vcu_queue *vcu_queue, u64 addr, u6
 			addr + length <= (u64)tmp->pa + PAGE_SIZE)
 			return tmp;
 	}
-	pr_info("%s addr %x length %x not found!\n", __func__, addr, length);
+	pr_info("%s addr %llx length %llx not found!\n", __func__, addr, length);
 
 	return NULL;
 }
@@ -664,7 +664,7 @@ static int vcu_check_reg_base(struct mtk_vcu *vcu, u64 addr, u64 length)
 		if (addr >= (u64)vcu->map_base[i].base &&
 			addr + length <= (u64)vcu->map_base[i].base + vcu->map_base[i].len)
 			return 0;
-	pr_info("%s addr %x length %x not found!\n", __func__, addr, length);
+	pr_info("%s addr %llx length %llx not found!\n", __func__, addr, length);
 
 	return -EINVAL;
 }
@@ -678,13 +678,13 @@ static void vcu_set_gce_cmd(struct cmdq_pkt *pkt,
 		if (vcu_check_reg_base(vcu, addr, 4) == 0)
 			cmdq_pkt_read_addr(pkt, addr, CMDQ_THR_SPR_IDX1);
 		else
-			pr_info("[VCU] CMD_READ wrong addr: 0x%x\n", addr);
+			pr_info("[VCU] CMD_READ wrong addr: 0x%llx\n", addr);
 	break;
 	case CMD_WRITE:
 		if (vcu_check_reg_base(vcu, addr, 4) == 0)
 			cmdq_pkt_write(pkt, vcu->clt_base, addr, data, mask);
 		else
-			pr_info("[VCU] CMD_WRITE wrong addr: 0x%x 0x%x 0x%x\n",
+			pr_info("[VCU] CMD_WRITE wrong addr: 0x%llx 0x%llx 0x%x\n",
 				addr, data, mask);
 	break;
 #if defined(CONFIG_MTK_SEC_VIDEO_PATH_SUPPORT)
@@ -714,7 +714,7 @@ static void vcu_set_gce_cmd(struct cmdq_pkt *pkt,
 		if (vcu_check_reg_base(vcu, addr, 4) == 0)
 			cmdq_pkt_poll_addr(pkt, data, addr, mask, gpr);
 		else
-			pr_info("[VCU] CMD_POLL_REG wrong addr: 0x%x 0x%x 0x%x\n",
+			pr_info("[VCU] CMD_POLL_REG wrong addr: 0x%llx 0x%llx 0x%x\n",
 				addr, data, mask);
 	break;
 	case CMD_WAIT_EVENT:
@@ -731,7 +731,7 @@ static void vcu_set_gce_cmd(struct cmdq_pkt *pkt,
 			cmdq_pkt_mem_move(pkt, vcu->clt_base, addr,
 				data, CMDQ_THR_SPR_IDX1);
 		else
-			pr_info("[VCU] CMD_MEM_MV wrong addr/data: 0x%x 0x%x\n",
+			pr_info("[VCU] CMD_MEM_MV wrong addr/data: 0x%llx 0x%llx\n",
 				addr, data);
 	break;
 	case CMD_POLL_ADDR:
@@ -740,7 +740,7 @@ static void vcu_set_gce_cmd(struct cmdq_pkt *pkt,
 			cmdq_pkt_poll_timeout(pkt, data, SUBSYS_NO_SUPPORT,
 				addr, mask, ~0, gpr);
 		else
-			pr_info("[VCU] CMD_POLL_REG wrong addr: 0x%x 0x%x 0x%x\n",
+			pr_info("[VCU] CMD_POLL_REG wrong addr: 0x%llx 0x%llx 0x%x\n",
 				addr, data, mask);
 	break;
 	default:
@@ -1285,7 +1285,7 @@ void vcu_get_gce_lock(struct platform_device *pdev, unsigned long codec_type)
 		return;
 	}
 	if (codec_type >= VCU_CODEC_MAX) {
-		pr_info("[VCU] %s invalid codec type %d.\n", __func__, codec_type);
+		pr_info("[VCU] %s invalid codec type %ld.\n", __func__, codec_type);
 		return;
 	}
 	vcu = platform_get_drvdata(pdev);
@@ -1302,7 +1302,7 @@ void vcu_put_gce_lock(struct platform_device *pdev, unsigned long codec_type)
 		return;
 	}
 	if (codec_type >= VCU_CODEC_MAX) {
-		pr_info("[VCU] %s invalid codec type %d.\n", __func__, codec_type);
+		pr_info("[VCU] %s invalid codec type %ld.\n", __func__, codec_type);
 		return;
 	}
 	vcu = platform_get_drvdata(pdev);
@@ -2212,6 +2212,7 @@ static void probe_death_signal(void *ignore, int sig, struct siginfo *info,
 		struct task_struct *task, int _group, int result)
 {
 	unsigned long flags;
+	int wait_cnt = 0;
 
 	if (strstr(task->comm, "vpud") && sig == SIGKILL) {
 		pr_info("[VPUD_PROBE_DEATH][signal][%d:%s]send death sig %d to[%d:%s]\n",
@@ -2221,6 +2222,24 @@ static void probe_death_signal(void *ignore, int sig, struct siginfo *info,
 		spin_lock_irqsave(&vcu_ptr->vpud_sig_lock, flags);
 		vcu_ptr->vpud_is_going_down = 1;
 		spin_unlock_irqrestore(&vcu_ptr->vpud_sig_lock, flags);
+
+		/* wait for GCE done & let IPI ack power off */
+		while (
+		atomic_read(&vcu_ptr->gce_job_cnt[VCU_VDEC][0]) > 0 ||
+		atomic_read(&vcu_ptr->gce_job_cnt[VCU_VDEC][1]) > 0 ||
+		atomic_read(&vcu_ptr->gce_job_cnt[VCU_VENC][0]) > 0 ||
+		atomic_read(&vcu_ptr->gce_job_cnt[VCU_VENC][1]) > 0) {
+			wait_cnt++;
+			if (wait_cnt > 5) {
+				pr_info("[VCU] Vpud killed gce status %d %d\n",
+				atomic_read(
+				&vcu_ptr->gce_job_cnt[VCU_VDEC][0]),
+				atomic_read(
+				&vcu_ptr->gce_job_cnt[VCU_VENC][0]));
+				break;
+			}
+			usleep_range(10000, 20000);
+		}
 	}
 }
 

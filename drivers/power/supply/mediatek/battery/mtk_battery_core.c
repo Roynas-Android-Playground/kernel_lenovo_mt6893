@@ -1060,6 +1060,11 @@ void fg_custom_init_from_header(void)
 		gm.rbat.rbat_pull_up_r = RBAT_PULL_UP_R;
 	}
 
+	if (IS_ENABLED(BAT_NTC_100)) {
+		printk("zzz-100k\n");
+		gm.rbat.type = 100;
+		gm.rbat.rbat_pull_up_r = RBAT_PULL_UP_R;
+	}
 }
 
 

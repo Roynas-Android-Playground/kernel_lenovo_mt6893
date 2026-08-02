@@ -17,7 +17,7 @@
 #include <drm/drm_panel.h>
 
 #define RT_MAX_NUM 10
-#define ESD_CHECK_NUM 3
+#define ESD_CHECK_NUM 4
 #define MAX_TX_CMD_NUM 20
 #define MAX_RX_CMD_NUM 20
 #define READ_DDIC_SLOT_NUM (4 * MAX_RX_CMD_NUM)
@@ -128,8 +128,25 @@ enum FPS_CHANGE_INDEX {
 	DYNFPS_DSI_MIPI_CLK = 4,
 };
 
+struct dsc_rc_range_parameters {
+	/**
+	 * @range_min_qp: Min Quantization Parameters allowed for this range
+	 */
+	u8 range_min_qp;
+	/**
+	 * @range_max_qp: Max Quantization Parameters allowed for this range
+	 */
+	u8 range_max_qp;
+	/**
+	 * @range_bpg_offset:
+	 * Bits/group offset to apply to target for this group
+	 */
+	u8 range_bpg_offset;
+};
+
 struct mtk_panel_dsc_params {
 	unsigned int enable;
+	unsigned int bdg_dsc_enable;
 	unsigned int ver; /* [7:4] major [3:0] minor */
 	unsigned int slice_mode;
 	unsigned int rgb_swap;
@@ -162,6 +179,8 @@ struct mtk_panel_dsc_params {
 	unsigned int rc_quant_incr_limit1;
 	unsigned int rc_tgt_offset_hi;
 	unsigned int rc_tgt_offset_lo;
+	unsigned int rc_buf_thresh[14];
+	struct dsc_rc_range_parameters rc_range_parameters[15];
 };
 struct mtk_dsi_phy_timcon {
 	unsigned int hs_trail;
@@ -220,6 +239,7 @@ struct mtk_panel_params {
 	unsigned int esd_check_enable;
 	struct esd_check_item lcm_esd_check_table[ESD_CHECK_NUM];
 	unsigned int ssc_disable;
+	unsigned int bdg_ssc_disable;
 	unsigned int ssc_range;
 	int lcm_color_mode;
 	unsigned int min_luminance;

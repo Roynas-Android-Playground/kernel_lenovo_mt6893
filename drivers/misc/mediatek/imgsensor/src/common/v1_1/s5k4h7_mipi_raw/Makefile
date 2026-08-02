@@ -11,6 +11,4 @@
 # GNU General Public License for more details.
 #
 
-obj-y += s5k4h7otp.o
 obj-y += s5k4h7mipiraw_Sensor.o
-

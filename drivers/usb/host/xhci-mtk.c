@@ -259,7 +259,7 @@ static int xhci_mtk_dbg_init(struct xhci_hcd_mtk *mtk)
 
 	file_testmode = NULL;
 	proc_mkdir(PROC_DIR_MTK_USB, NULL);
-
+	printk("xhci_mtk_dbg_init start!!!!");
 	file_testmode = proc_create_data(PROC_FILE_TESTMODE, 0644, NULL,
 						&xhci_mtk_test_mode_fops, mtk);
 	if (file_testmode) {

@@ -330,6 +330,8 @@ int _blocking_flush(void)
 #endif
 	return ret;
 }
+
+#ifndef CONFIG_MTK_MT6382_BDG
 static int _vfp_chg_callback(unsigned long userdata);
 
 int _vfp_chg_callback(unsigned long userdata)
@@ -357,6 +359,8 @@ int _vfp_chg_callback(unsigned long userdata)
 	}
 	return 0;
 }
+#endif
+
 static int primary_display_dsi_vfp_change(int state)
 {
 	int ret = 0;
@@ -422,10 +426,11 @@ static int primary_display_dsi_vfp_change(int state)
 			qhandle, CMDQ_STOP_VDO_MODE, 0);
 #endif
 	}
-#ifdef CONFIG_MTK_MT6382_BDG
 	dpmgr_path_ioctl(primary_get_dpmgr_handle(), qhandle,
 				 DDP_DSI_PORCH_CHANGE,
 				 &apply_vfp);
+
+#ifdef CONFIG_MTK_MT6382_BDG
 
 		dpmgr_path_build_cmdq(primary_get_dpmgr_handle(), qhandle,
 				CMDQ_START_VDO_MODE, 0);
@@ -436,7 +441,7 @@ static int primary_display_dsi_vfp_change(int state)
 				primary_get_dpmgr_handle()), qhandle, 0);
 
 		cmdqRecFlush(qhandle);
-#endif
+#else
 	if (primary_display_is_support_ARR() && apply_vfp != 0) {
 		cmdqRecBackupUpdateSlot(qhandle, hSlot, 0, state);
 		cmdqRecBackupUpdateSlot(qhandle, hSlot, 1, apply_vfp);
@@ -445,7 +450,7 @@ static int primary_display_dsi_vfp_change(int state)
 	} else {
 		cmdqRecFlushAsync(qhandle);
 	}
-
+#endif
 	cmdqRecDestroy(qhandle);
 
 	/*ToDo: ARR, send cmd to DDIC, tell DDIC FPS changed*/

@@ -1515,7 +1515,7 @@ static int vidioc_venc_qbuf(struct file *file, void *priv,
 			&ctx->dev->plat_dev->dev);
 		sgt = dma_buf_map_attachment(buf_att, DMA_TO_DEVICE);
 		if (IS_ERR_OR_NULL(sgt)) {
-			mtk_v4l2_err("dma_buf_map_attachment fail %d.\n", sgt);
+			mtk_v4l2_err("dma_buf_map_attachment fail %p.\n", sgt);
 			dma_buf_detach(mtkbuf->frm_buf.meta_dma, buf_att);
 			return -EINVAL;
 		}
@@ -1728,7 +1728,7 @@ static int vb2ops_venc_buf_prepare(struct vb2_buffer *vb)
 				&ctx->dev->plat_dev->dev);
 			sgt = dma_buf_map_attachment(buf_att, DMA_TO_DEVICE);
 			if (IS_ERR_OR_NULL(sgt)) {
-				mtk_v4l2_err("dma_buf_map_attachment fail %d.\n", sgt);
+				mtk_v4l2_err("dma_buf_map_attachment fail %p.\n", sgt);
 				dma_buf_detach(vb->planes[i].dbuf, buf_att);
 				return -EINVAL;
 			}
@@ -1779,7 +1779,7 @@ static void vb2ops_venc_buf_finish(struct vb2_buffer *vb)
 				&ctx->dev->plat_dev->dev);
 			sgt = dma_buf_map_attachment(buf_att, DMA_FROM_DEVICE);
 			if (IS_ERR_OR_NULL(sgt)) {
-				mtk_v4l2_err("dma_buf_map_attachment fail %d.\n", sgt);
+				mtk_v4l2_err("dma_buf_map_attachment fail %p.\n", sgt);
 				dma_buf_detach(vb->planes[0].dbuf, buf_att);
 				return;
 			}
@@ -2783,11 +2783,11 @@ int mtk_vcodec_enc_ctrls_setup(struct mtk_vcodec_ctx *ctx)
 		V4L2_MPEG_VIDEO_MPEG4_PROFILE_SIMPLE,
 		0, V4L2_MPEG_VIDEO_MPEG4_PROFILE_SIMPLE);
 	v4l2_ctrl_new_std_menu(handler, ops, V4L2_CID_MPEG_VIDEO_H264_LEVEL,
-		V4L2_MPEG_VIDEO_H264_LEVEL_4_2,
+		V4L2_MPEG_VIDEO_H264_LEVEL_5_1,
 		0, V4L2_MPEG_VIDEO_H264_LEVEL_1_0);
 	v4l2_ctrl_new_std_menu(handler, ops,
 		V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
-		V4L2_MPEG_VIDEO_HEVC_LEVEL_4,
+		V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1,
 		0, V4L2_MPEG_VIDEO_HEVC_LEVEL_4);
 	v4l2_ctrl_new_std_menu(handler, ops,
 		V4L2_CID_MPEG_VIDEO_HEVC_TIER,

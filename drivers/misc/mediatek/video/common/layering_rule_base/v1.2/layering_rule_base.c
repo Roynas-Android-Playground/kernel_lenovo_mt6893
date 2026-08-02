@@ -81,7 +81,7 @@ int get_layering_opt(enum LYE_HELPER_OPT opt)
 #ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
 void set_round_corner_opt(enum LYE_HELPER_OPT opt, int value)
 {
-	if (opt >= LYE_OPT_NUM) {
+	if (opt >= LYE_OPT_NUM || opt < 0) {
 		DISPMSG("%s invalid round corner opt:%d\n", __func__, opt);
 		return;
 	}
@@ -91,7 +91,7 @@ void set_round_corner_opt(enum LYE_HELPER_OPT opt, int value)
 
 int get_round_corner_opt(enum LYE_HELPER_OPT opt)
 {
-	if (opt >= LYE_OPT_NUM) {
+	if (opt >= LYE_OPT_NUM || opt < 0) {
 		DISPMSG("%s invalid round corner opt:%d\n", __func__, opt);
 		return -1;
 	}
@@ -587,6 +587,11 @@ static void print_disp_info_to_log_buffer(struct disp_layer_info *disp_info)
 void rollback_layer_to_GPU(struct disp_layer_info *disp_info, int disp_idx,
 	int i)
 {
+	if (disp_idx < 0) {
+		DISPMSG("%s: error disp_idx:%d\n",
+			__func__, disp_idx);
+		return;
+	}
 	if (is_layer_id_valid(disp_info, disp_idx, i) == false)
 		return;
 
@@ -2185,6 +2190,7 @@ static int load_hrt_test_data(struct disp_layer_info *disp_info)
 	struct layer_config *input_config;
 
 	pos = 0;
+	disp_id = 0;
 	test_case = -1;
 	oldfs = get_fs();
 	set_fs(KERNEL_DS);
@@ -2238,7 +2244,7 @@ static int load_hrt_test_data(struct disp_layer_info *disp_info)
 			if (disp_info->input_config[disp_id] == NULL)
 				return 0;
 		} else if (strncmp(line_buf, "[set_layer]", 11) == 0) {
-			unsigned long int tmp_info;
+			unsigned long int tmp_info = 0;
 
 			tok = strchr(line_buf, ']');
 			if (!tok)

@@ -35,3 +35,9 @@ config MTK_ADDITIONAL_BATTERY_TABLE
 	  Table number is five.
 	  Set No to disable the fifth battery table
 	  Table number is four.
+
+config BATTERY_NTC_100K
+	bool "Enable battery ntc 100k"
+	default n
+	help
+	  Set Yes to enable 100k battery ntc

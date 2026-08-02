@@ -69,6 +69,10 @@
 #include "include/pmic_api_buck.h"
 #endif
 
+#ifdef CONFIG_MTK_MT6382_BDG
+#include "mtk_disp_bdg.h"
+#endif
+
 #define DRIVER_NAME "mediatek"
 #define DRIVER_DESC "Mediatek SoC DRM"
 #define DRIVER_DATE "20150513"
@@ -3104,6 +3108,10 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 
 	mtk_drm_first_enable(drm);
 
+#ifdef CONFIG_MTK_MT6382_BDG
+	bdg_first_init();
+#endif
+
 	return 0;
 err_kms_helper_poll_fini:
 	drm_kms_helper_poll_fini(drm);
@@ -3168,6 +3176,12 @@ static const struct drm_ioctl_desc mtk_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(MTK_SUPPORT_COLOR_TRANSFORM,
 				mtk_drm_ioctl_support_color_matrix,
 				DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(MTK_SUPPORT_DC_DIM,
+				mtk_drm_ioctl_enable_dc_dimming,
+				DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(MTK_SET_DC_TABLE,
+				mtk_drm_ioctl_set_dc_table,
+				DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(MTK_SET_GAMMALUT, mtk_drm_ioctl_set_gammalut,
 			  DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(MTK_SET_PQPARAM, mtk_drm_ioctl_set_pqparam,
@@ -3218,6 +3232,11 @@ static const struct drm_ioctl_desc mtk_ioctls[] = {
 #endif
 	DRM_IOCTL_DEF_DRV(MTK_DEBUG_LOG, mtk_disp_ioctl_debug_log_switch,
 					DRM_UNLOCKED),
+
+	DRM_IOCTL_DEF_DRV(MTK_GET_PQ_CAPS, mtk_drm_ioctl_get_pq_caps,
+			  DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(MTK_SET_PQ_CAPS, mtk_drm_ioctl_set_pq_caps,
+			  DRM_UNLOCKED),
 };
 
 #if IS_ENABLED(CONFIG_COMPAT)
@@ -3244,6 +3263,8 @@ static const struct drm_ioctl32_desc mtk_compat_ioctls[] = {
 	DRM_IOCTL32_DEF_DRV(MTK_CCORR_EVENTCTL, NULL),
 	DRM_IOCTL32_DEF_DRV(MTK_CCORR_GET_IRQ, NULL),
 	DRM_IOCTL32_DEF_DRV(MTK_SUPPORT_COLOR_TRANSFORM, NULL),
+	DRM_IOCTL32_DEF_DRV(MTK_SUPPORT_DC_DIM, NULL),
+	DRM_IOCTL32_DEF_DRV(MTK_SET_DC_TABLE, NULL),
 	DRM_IOCTL32_DEF_DRV(MTK_SET_GAMMALUT, NULL),
 	DRM_IOCTL32_DEF_DRV(MTK_SET_PQPARAM, NULL),
 	DRM_IOCTL32_DEF_DRV(MTK_SET_PQINDEX, NULL),

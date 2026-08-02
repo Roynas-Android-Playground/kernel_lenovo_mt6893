@@ -2178,7 +2178,10 @@ static int mtk_nanohub_report_to_manager(struct data_unit_t *data)
 			event.timestamp = data->time_stamp;
 			event.sensor_type = id_to_type(data->sensor_type);
 			event.action = data->flush_action;
-			event.word[0] = data->light;
+			//event.word[0] = data->light;
+			event.word[0] = data->als_event.data[0];
+			event.word[1] = data->als_event.data[1];
+			event.word[2] = data->als_event.data[2];
 			break;
 		case ID_PROXIMITY:
 			event.timestamp = data->time_stamp;

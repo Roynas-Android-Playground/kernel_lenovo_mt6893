@@ -67,6 +67,9 @@ static void tcpc_power_work_call(bool enable)
 	}
 }
 
+//for P537 DP/DM short
+int g_typec_state = 0;
+
 static int otg_tcp_notifier_call(struct notifier_block *nb,
 		unsigned long event, void *data)
 {
@@ -88,7 +91,7 @@ static int otg_tcp_notifier_call(struct notifier_block *nb,
 		pr_info("%s, TCP_NOTIFY_TYPEC_STATE, old_state=%d, new_state=%d\n",
 				__func__, noti->typec_state.old_state,
 				noti->typec_state.new_state);
-
+				g_typec_state = noti->typec_state.new_state;
 		if (noti->typec_state.old_state == TYPEC_UNATTACHED &&
 			noti->typec_state.new_state == TYPEC_ATTACHED_SRC) {
 			pr_info("%s OTG Plug in\n", __func__);

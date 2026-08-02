@@ -49,7 +49,9 @@
 #define MT65XX_LED_MODE_NONE (0)
 #define MT65XX_LED_MODE_CUST_LCM (4)
 #endif
-
+#ifdef CONFIG_MTK_DC_DIM_SUPPORT
+//#include "mtk_disp_ccorr.h"
+#endif
 #include "mtk_drm_crtc.h"
 #include "mtk_drm_ddp_comp.h"
 #include "mtk_drm_drv.h"
@@ -1542,6 +1544,9 @@ int mtk_drm_ioctl_aal_set_param(struct drm_device *dev, void *data,
 	backlight_value = g_aal_param.FinalBacklight;
 	/* set cabc gain zero when detect backlight */
 	/* setting equal to zero */
+#ifdef CONFIG_MTK_DC_DIM_SUPPORT
+	backlight_value = disp_set_ccorr_by_idx(backlight_value);
+#endif
 	if (backlight_value == 0)
 		g_aal_param.cabc_fltgain_force = 0;
 

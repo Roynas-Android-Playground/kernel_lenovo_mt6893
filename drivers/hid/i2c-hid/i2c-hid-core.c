@@ -42,11 +42,15 @@
 
 #include <linux/platform_data/i2c-hid.h>
 
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
 #include "../hid-ids.h"
 #include "i2c-hid.h"
 
 /* quirks to control the device */
 #define I2C_HID_QUIRK_SET_PWR_WAKEUP_DEV	BIT(0)
+#define I2C_HID_QUIRK_NO_IRQ_AFTER_RESET	BIT(1)
+#define I2C_HID_QUIRK_NO_RUNTIME_PM		BIT(2)
 
 /* flags */
 #define I2C_HID_STARTED		0
@@ -56,6 +60,13 @@
 #define I2C_HID_PWR_ON		0x00
 #define I2C_HID_PWR_SLEEP	0x01
 
+int kb_hall_gpio;
+int kb_connect_status = 0;
+extern int screen_is_black;
+extern void report_power_key(void);
+extern int register_kb_wakeup_devices(void);
+extern int register_mouse_wakeup_devices(void);
+extern void hidinput_connection_worker(struct work_struct *work);
 /* debug option */
 static bool debug;
 module_param(debug, bool, 0444);
@@ -169,6 +180,12 @@ static const struct i2c_hid_quirks {
 		I2C_HID_QUIRK_SET_PWR_WAKEUP_DEV },
 	{ USB_VENDOR_ID_WEIDA, USB_DEVICE_ID_WEIDA_8755,
 		I2C_HID_QUIRK_SET_PWR_WAKEUP_DEV },
+	{ I2C_VENDOR_ID_HT32F5_KEY, I2C_PRODUCT_ID_HT32F5_KEY,
+		I2C_HID_QUIRK_NO_IRQ_AFTER_RESET |
+		I2C_HID_QUIRK_NO_RUNTIME_PM },
+	{ I2C_VENDOR_ID_HT32F5_MOUSE, I2C_PRODUCT_ID_HT32F5_MOUSE,
+		I2C_HID_QUIRK_NO_IRQ_AFTER_RESET |
+		I2C_HID_QUIRK_NO_RUNTIME_PM },
 	{ 0, 0 }
 };
 
@@ -253,7 +270,9 @@ static int __i2c_hid_command(struct i2c_client *client,
 
 	ret = 0;
 
-	if (wait) {
+	if (wait && (ihid->quirks & I2C_HID_QUIRK_NO_IRQ_AFTER_RESET)) {
+		msleep(100);
+	} else if (wait) {
 		i2c_hid_dbg(ihid, "%s: waiting...\n", __func__);
 		if (!wait_event_timeout(ihid->wait,
 				!test_bit(I2C_HID_RESET_PENDING, &ihid->flags),
@@ -448,11 +467,15 @@ out_unlock:
 	mutex_unlock(&ihid->reset_lock);
 	return ret;
 }
-
+//#define kb_debug
+#ifdef kb_debug
+static int i=0;
+#endif
 static void i2c_hid_get_input(struct i2c_hid *ihid)
 {
 	int ret;
 	u32 ret_size;
+	int adc_value = 0;
 	int size = le16_to_cpu(ihid->hdesc.wMaxInputLength);
 
 	if (size > ihid->bufsize)
@@ -484,6 +507,31 @@ static void i2c_hid_get_input(struct i2c_hid *ihid)
 	}
 
 	i2c_hid_dbg(ihid, "input: %*ph\n", ret_size, ihid->inbuf);
+
+	if(ihid->inbuf[2]==0x06){
+		adc_value= ihid->inbuf[7]| ihid->inbuf[8]<<8;
+		kb_connect_status=ihid->inbuf[3]&0x01;
+	}
+	printk("adc_value =0x%x,kb_connect_status=%d,input_registered=%d,screen_is_black:[%d]\n",
+		adc_value,kb_connect_status,ihid->hid->input_registered,screen_is_black);
+	if(ihid->hid->vendor==0x17EF&&ihid->hid->product==0x613D){
+#ifdef kb_debug
+		if (i==0){
+			hidinput_connect(ihid->hid,0);
+			i++;
+		}
+#else
+		if(ihid->hid->input_registered == 0 && kb_connect_status == 1){
+			hidinput_connect(ihid->hid,0);
+			if (screen_is_black == 1 && !gpio_get_value(kb_hall_gpio)) {
+				report_power_key();
+				screen_is_black = 0;
+			}
+		}else if(ihid->hid->input_registered == 1 && kb_connect_status == 0){
+			hidinput_disconnect(ihid->hid);
+		}
+#endif
+	}
 
 	if (test_bit(I2C_HID_STARTED, &ihid->flags))
 		hid_input_report(ihid->hid, HID_INPUT_REPORT, ihid->inbuf + 2,
@@ -828,7 +876,8 @@ static int i2c_hid_init_irq(struct i2c_client *client)
 
 		return ret;
 	}
-
+	//enable_irq_wake(client->irq);
+	//device_init_wakeup(&client->dev, true);
 	return 0;
 }
 
@@ -930,6 +979,126 @@ static inline int i2c_hid_acpi_pdata(struct i2c_client *client,
 static inline void i2c_hid_acpi_fix_up_power(struct device *dev) {}
 #endif
 
+static bool is_mcu_init = false;
+static int  i2c_enable_mcu(struct i2c_client *client,
+		struct i2c_hid_platform_data *pdata)
+{
+	int ret =0;
+	int mcu_gpio_value = 0,hall_int_gpio_value=0;
+#if 0
+	ret = gpio_request(pdata->mcu_en_gpio, "mcu_en_gpio");
+	if(ret)
+	{
+		pr_err("%s: request mcu_en_gpio failed\n", __func__);
+		goto free_en_gpio;
+	}
+#endif
+	mcu_gpio_value = gpio_get_value(pdata->mcu_en_gpio);
+	pr_err("%s: mcu_gpio value is %d before setting as 1\n", __func__,mcu_gpio_value);
+#if 0
+	ret = gpio_direction_output(pdata->mcu_en_gpio, 1);
+
+	if(ret)
+	{
+		pr_err("%s: set mcu_en_gpio failed\n", __func__);
+		goto free_en_gpio;
+	}
+	else
+	{
+		printk("---qzr test set mcu_en_gpio success---");
+		}
+#endif
+	msleep(100);
+
+
+	ret = gpio_request(pdata->mcu_rst_gpio, "mcu_rst_gpio");
+	if(ret)
+	{
+		pr_err("%s: request mcu_rst_gpio failed\n", __func__);
+		goto free_rst_gpio;
+	}
+	ret = gpio_direction_output(pdata->mcu_rst_gpio, 1);
+
+	if(ret)
+	{
+		pr_err("%s: set mcu_rst_gpio failed\n", __func__);
+		goto free_rst_gpio;
+	}
+
+	ret = gpio_request(pdata->mcu_hall_int_gpio, "mcu_hall_int_gpio");
+	if(ret)
+	{
+		pr_err("%s: request mcu_hall_int_gpio failed\n", __func__);
+		goto free_hall_int_gpio;
+	}
+
+	ret = gpio_direction_output(pdata->mcu_hall_int_gpio, 1);
+
+	if(ret)
+	{
+		pr_err("%s: set mcu_hall_int_gpio failed\n", __func__);
+		goto free_hall_int_gpio;
+	}
+	msleep(10);
+	hall_int_gpio_value = gpio_get_value(pdata->mcu_en_gpio);
+
+	pr_err("%s: mcu_gpio value is %d after setting as 1,hall_int_gpio_value=%d\n", __func__,mcu_gpio_value,hall_int_gpio_value);
+
+	return 0;
+
+	free_hall_int_gpio:
+		gpio_free(pdata->mcu_hall_int_gpio);
+	free_rst_gpio:
+		gpio_free(pdata->mcu_rst_gpio);
+	free_en_gpio:
+		//gpio_free(pdata->mcu_en_gpio);
+		return ret;
+}
+/**********add pogo_sw_en_gpio node-start******************/
+static struct kobject *pogo_sw_en_gpio_device = NULL;
+static int pogo_sw_en_gpio = 0;
+
+static ssize_t pogo_gpio_value_write(struct device *dev, struct device_attribute *attr, const char *buffer, size_t count)
+{
+	int ret;
+	printk("%s:buffer[0]==[%d]\n",__func__,buffer[0]);
+	if (buffer[0] == '1'){
+		gpio_direction_output(pogo_sw_en_gpio, 1);
+		printk("%s:set pogo_sw_en_gpio 1\n",__func__);
+	}else if (buffer[0] == '0'){
+		gpio_direction_output(pogo_sw_en_gpio, 0);
+		printk("%s:set pogo_sw_en_gpio 0\n",__func__);
+	}
+	return count;
+
+}
+
+static ssize_t pogo_gpio_value_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", gpio_get_value(pogo_sw_en_gpio));
+}
+static DEVICE_ATTR(pogo_gpio_value, S_IRUGO|S_IWUSR, pogo_gpio_value_show, pogo_gpio_value_write);
+static int create_pogo_en_gpio_node(void)
+{
+	int error = 0;
+	if(pogo_sw_en_gpio_device != NULL){
+		pr_err(KERN_CRIT "pogo_en_gpio already created\n");
+	} else {
+		pogo_sw_en_gpio_device = kobject_create_and_add("pogo_en_gpio", NULL);
+		if (pogo_sw_en_gpio_device == NULL) {
+			printk(KERN_CRIT "%s: pogo_en_gpio register failed\n", __func__);
+			error = -ENOMEM;
+			return error ;
+		}
+		error = sysfs_create_file(pogo_sw_en_gpio_device, &dev_attr_pogo_gpio_value.attr);
+		if (error) {
+			printk(KERN_CRIT "%s: pogo_en_gpio create_file failed\n", __func__);
+			kobject_del(pogo_sw_en_gpio_device);
+		}
+	}
+	return 0 ;
+}
+/**********add pogo_sw_en_gpio node-end******************/
 #ifdef CONFIG_OF
 static int i2c_hid_of_probe(struct i2c_client *client,
 		struct i2c_hid_platform_data *pdata)
@@ -954,6 +1123,60 @@ static int i2c_hid_of_probe(struct i2c_client *client,
 				   &val);
 	if (!ret)
 		pdata->post_power_delay_ms = val;
+	ret = of_get_named_gpio(dev->of_node, "mcu_en_gpio", 0);
+	if (ret < 0 )
+	{
+		pr_err("%s: Not support pogo keyboard and mouse\n", __func__);
+		return -ENODEV;
+	}
+	else{
+		pdata->mcu_en_gpio = ret;
+	}
+	ret = of_get_named_gpio(dev->of_node, "mcu_rst_gpio", 0);
+	if (ret < 0 )
+	{
+		pr_err("%s: Not support pogo keyboard and mouse rst pin\n", __func__);
+		return -ENODEV;
+	}
+	else
+		pdata->mcu_rst_gpio = ret;
+	ret = of_get_named_gpio(dev->of_node, "mcu_hall_int_gpio", 0);
+	if (ret < 0 )
+	{
+		pr_err("%s: Not support pogo keyboard and mouse hall int pin\n", __func__);
+		return -ENODEV;
+	}
+	else{
+		pdata->mcu_hall_int_gpio = ret;
+		kb_hall_gpio = ret;
+	}
+	printk("%s: mcu_en_gpio %d,mcu_rst_gpio=%d,post_power_delay_ms=%d\n", __func__,
+		pdata->mcu_en_gpio,pdata->mcu_rst_gpio,pdata->post_power_delay_ms);
+
+	/*********** pogo_sw_en_gpio start ****************/
+	ret = of_get_named_gpio(dev->of_node, "pogo_sw_en_gpio", 0);
+	if (ret < 0) {
+		pr_err("%s: of_get_named_gpio:pogo_sw_en_gpio fail\n", __func__);
+	} else {
+		pogo_sw_en_gpio = ret;
+		ret = gpio_request(pogo_sw_en_gpio, "pogo_sw_en_gpio");
+		if (ret) {
+			pr_err("%s: request pogo_sw_en_gpio failed\n", __func__);
+		} else {
+			printk("%s: pogo_sw_en_gpio value is %d.\n", __func__,gpio_get_value(pogo_sw_en_gpio));
+			ret = gpio_direction_output(pogo_sw_en_gpio, 0);
+			if (ret) {
+				pr_err("%s: set pogo_sw_en_gpio output 1 failed\n", __func__);
+			} else {
+				mdelay(10);
+				printk("%s: pogo_sw_en_gpio value is %d.\n", __func__,gpio_get_value(pogo_sw_en_gpio));
+			}
+			ret = create_pogo_en_gpio_node();
+			if (ret)
+				printk("create_pogo_en_gpio_node filed\n");
+		}
+	}
+	/*********** pogo_sw_en_gpio end ****************/
 
 	return 0;
 }
@@ -970,11 +1193,11 @@ static inline int i2c_hid_of_probe(struct i2c_client *client,
 	return -ENODEV;
 }
 #endif
-
+struct device *g_dev;
 static int i2c_hid_probe(struct i2c_client *client,
 			 const struct i2c_device_id *dev_id)
 {
-	int ret;
+	int ret,i2c_wait=0;
 	struct i2c_hid *ihid;
 	struct hid_device *hid;
 	__u16 hidRegister;
@@ -1013,22 +1236,39 @@ static int i2c_hid_probe(struct i2c_client *client,
 	} else {
 		ihid->pdata = *platform_data;
 	}
+	if(!is_mcu_init)
+	{
+		ret = i2c_enable_mcu(client, &ihid->pdata);
+		if (ret)
+			goto err;
 
-	ihid->pdata.supply = devm_regulator_get(&client->dev, "vdd");
-	if (IS_ERR(ihid->pdata.supply)) {
-		ret = PTR_ERR(ihid->pdata.supply);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&client->dev, "Failed to get regulator: %d\n",
+//#if 0
+		ihid->pdata.supply = devm_regulator_get(&client->dev, "vfp");
+		if (IS_ERR(ihid->pdata.supply)) {
+			ret = PTR_ERR(ihid->pdata.supply);
+			if (ret != -EPROBE_DEFER)
+				dev_err(&client->dev, "Failed to get regulator: %d\n",
+					ret);
+			goto err;
+		}
+
+		ret = regulator_set_voltage(ihid->pdata.supply,3300000,3300000);
+		if (ret < 0) {
+			dev_err(&client->dev, "Failed to set voltage: %d\n",
 				ret);
-		goto err;
-	}
+			goto err;
+		}
 
-	ret = regulator_enable(ihid->pdata.supply);
-	if (ret < 0) {
-		dev_err(&client->dev, "Failed to enable regulator: %d\n",
-			ret);
-		goto err;
+		ret = regulator_enable(ihid->pdata.supply);
+		if (ret < 0) {
+			dev_err(&client->dev, "Failed to enable regulator: %d\n",
+				ret);
+			goto err;
+		}
+//#endif
 	}
+	is_mcu_init = true;  //gpio was set!
+
 	if (ihid->pdata.post_power_delay_ms)
 		msleep(ihid->pdata.post_power_delay_ms);
 
@@ -1057,16 +1297,39 @@ static int i2c_hid_probe(struct i2c_client *client,
 	device_enable_async_suspend(&client->dev);
 
 	/* Make sure there is something at this address */
-	ret = i2c_smbus_read_byte(client);
-	if (ret < 0) {
-		dev_dbg(&client->dev, "nothing at this address: %d\n", ret);
+	while(i2c_wait < 3)
+	{
+		printk("%s:%d\n",__func__,i2c_wait);
+		ret = i2c_smbus_read_byte(client);
+		if (ret < 0) {
+			dev_err(&client->dev, "nothing at this address: %d\n", ret);
+			//ret = -ENXIO;
+			//goto err_pm;
+			//msleep(15);
+			//i2c_wait ++;
+			//continue;
+		}
+		printk("%s2222:%d\n",__func__,i2c_wait);
+		ret = i2c_hid_fetch_hid_descriptor(ihid);
+		if (ret < 0)
+		{
+			//goto err_pm;
+			msleep(15);
+			i2c_wait ++;
+		}
+		else
+		{
+			printk("i2c success,retry count is:%d\n",i2c_wait);
+			break;
+		}
+	}
+
+	if(i2c_wait >= 3)
+	{
+		printk("i2c error,retry count is:%d\n",i2c_wait);
 		ret = -ENXIO;
 		goto err_pm;
 	}
-
-	ret = i2c_hid_fetch_hid_descriptor(ihid);
-	if (ret < 0)
-		goto err_pm;
 
 	ret = i2c_hid_init_irq(client);
 	if (ret < 0)
@@ -1087,9 +1350,37 @@ static int i2c_hid_probe(struct i2c_client *client,
 	hid->version = le16_to_cpu(ihid->hdesc.bcdVersion);
 	hid->vendor = le16_to_cpu(ihid->hdesc.wVendorID);
 	hid->product = le16_to_cpu(ihid->hdesc.wProductID);
+	hid->input_registered = false;
 
-	snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX",
+	printk("%s:VID:[0x%x],PID:[0x%x]\n",__func__,hid->vendor,hid->product);
+
+	if (hid->product == 0x3164){
+		printk("%s:failed,because of old mouse fireware",__func__);
+		regulator_disable(ihid->pdata.supply);
+		ret = -ENODEV;
+		goto err_irq;
+	}
+	if (hid->product == 0x6103){
+		printk("%s:failed,because of old kb fireware",__func__);
+		ret = -ENODEV;
+		goto err_irq;
+	}
+
+	if (hid->vendor==0x17EF&&hid->product==0x613D){
+		snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX P11 Pro Gen2 KeyBoard Lenovo",
 		 client->name, hid->vendor, hid->product);
+		register_kb_wakeup_devices();
+		g_dev = &client->dev;
+	} else if(hid->vendor==0x04F3&&hid->product==0x31A8){
+		snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX P11 Pro Gen2 TouchPad",
+		 client->name, hid->vendor, hid->product);
+		register_mouse_wakeup_devices();
+	} else {
+		snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX",
+		 client->name, hid->vendor, hid->product);
+	}
+	printk(KERN_DEBUG "hid->version_id=0x%x ",le16_to_cpu(ihid->hdesc.wVersionID));
+
 	strlcpy(hid->phys, dev_name(&client->dev), sizeof(hid->phys));
 
 	ihid->quirks = i2c_hid_lookup_quirk(hid->vendor, hid->product);
@@ -1101,7 +1392,14 @@ static int i2c_hid_probe(struct i2c_client *client,
 		goto err_mem_free;
 	}
 
-	pm_runtime_put(&client->dev);
+	if (!(ihid->quirks & I2C_HID_QUIRK_NO_RUNTIME_PM))
+		pm_runtime_put(&client->dev);
+
+	if(hid->vendor==0x17EF&&hid->product==0x613D){
+		INIT_DELAYED_WORK(&hid->connection_work, hidinput_connection_worker);
+		schedule_delayed_work(&hid->connection_work,msecs_to_jiffies(100));
+	}
+	printk("%s,success\n",__func__);
 	return 0;
 
 err_mem_free:
@@ -1115,7 +1413,10 @@ err_pm:
 	pm_runtime_disable(&client->dev);
 
 err_regulator:
-	regulator_disable(ihid->pdata.supply);
+	//regulator_disable(ihid->pdata.supply);
+	gpio_free(ihid->pdata.mcu_hall_int_gpio);
+	gpio_free(ihid->pdata.mcu_rst_gpio);
+	//gpio_free(ihid->pdata.mcu_en_gpio);
 
 err:
 	i2c_hid_free_buffers(ihid);
@@ -1128,7 +1429,8 @@ static int i2c_hid_remove(struct i2c_client *client)
 	struct i2c_hid *ihid = i2c_get_clientdata(client);
 	struct hid_device *hid;
 
-	pm_runtime_get_sync(&client->dev);
+	if (!(ihid->quirks & I2C_HID_QUIRK_NO_RUNTIME_PM))
+		pm_runtime_get_sync(&client->dev);
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
 	pm_runtime_put_noidle(&client->dev);
@@ -1141,7 +1443,7 @@ static int i2c_hid_remove(struct i2c_client *client)
 	if (ihid->bufsize)
 		i2c_hid_free_buffers(ihid);
 
-	regulator_disable(ihid->pdata.supply);
+	//regulator_disable(ihid->pdata.supply);
 
 	kfree(ihid);
 
@@ -1165,6 +1467,7 @@ static int i2c_hid_suspend(struct device *dev)
 	int ret;
 	int wake_status;
 
+	printk(KERN_DEBUG "=== %s ===\n",__func__);
 	if (hid->driver && hid->driver->suspend) {
 		/*
 		 * Wake up the device so that IO issues in
@@ -1194,9 +1497,9 @@ static int i2c_hid_suspend(struct device *dev)
 			hid_warn(hid, "Failed to enable irq wake: %d\n",
 				wake_status);
 	} else {
-		ret = regulator_disable(ihid->pdata.supply);
-		if (ret < 0)
-			hid_warn(hid, "Failed to disable supply: %d\n", ret);
+		//ret = regulator_disable(ihid->pdata.supply);
+		//if (ret < 0)
+		//	hid_warn(hid, "Failed to disable supply: %d\n", ret);
 	}
 
 	return 0;
@@ -1210,10 +1513,11 @@ static int i2c_hid_resume(struct device *dev)
 	struct hid_device *hid = ihid->hid;
 	int wake_status;
 
+	printk(KERN_DEBUG "=== %s ===!\n",__func__);
 	if (!device_may_wakeup(&client->dev)) {
-		ret = regulator_enable(ihid->pdata.supply);
-		if (ret < 0)
-			hid_warn(hid, "Failed to enable supply: %d\n", ret);
+		//ret = regulator_enable(ihid->pdata.supply);
+		//if (ret < 0)
+		//	hid_warn(hid, "Failed to enable supply: %d\n", ret);
 		if (ihid->pdata.post_power_delay_ms)
 			msleep(ihid->pdata.post_power_delay_ms);
 	} else if (ihid->irq_wake_enabled) {
@@ -1250,7 +1554,7 @@ static int i2c_hid_runtime_suspend(struct device *dev)
 	struct i2c_client *client = to_i2c_client(dev);
 
 	i2c_hid_set_power(client, I2C_HID_PWR_SLEEP);
-	disable_irq(client->irq);
+	//disable_irq(client->irq);
 	return 0;
 }
 
@@ -1258,9 +1562,22 @@ static int i2c_hid_runtime_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 
-	enable_irq(client->irq);
+	//enable_irq(client->irq);
 	i2c_hid_set_power(client, I2C_HID_PWR_ON);
 	return 0;
+}
+
+void kb_hid_suspend(void)
+{
+	if (g_dev)
+		i2c_hid_runtime_suspend(g_dev);
+	return;
+}
+void kb_hid_resume(void)
+{
+	if (g_dev)
+		i2c_hid_runtime_resume(g_dev);
+	return;
 }
 #endif
 

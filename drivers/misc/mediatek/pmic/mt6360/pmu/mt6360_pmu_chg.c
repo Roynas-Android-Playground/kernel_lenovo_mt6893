@@ -111,6 +111,7 @@ struct mt6360_pmu_chg_info {
 
 /* for recive bat oc notify */
 struct mt6360_pmu_chg_info *g_mpci;
+struct charger_device *g_chg_dev;
 
 enum mt6360_iinlmtsel {
 	MT6360_IINLMTSEL_AICR_3250 = 0,
@@ -1388,7 +1389,7 @@ static int mt6360_is_safety_timer_enabled(
 	return 0;
 }
 
-static int mt6360_enable_hz(struct charger_device *chg_dev, bool en)
+int mt6360_enable_hz(struct charger_device *chg_dev, bool en)
 {
 	struct mt6360_pmu_chg_info *mpci = charger_get_data(chg_dev);
 	int ret = 0;
@@ -2694,7 +2695,7 @@ static int mt6360_chg_init_setting(struct mt6360_pmu_chg_info *mpci)
 	return ret;
 }
 
-static int mt6360_set_shipping_mode(struct mt6360_pmu_chg_info *mpci)
+int mt6360_set_shipping_mode(struct mt6360_pmu_chg_info *mpci)
 {
 	struct mt6360_pmu_info *mpi = mpci->mpi;
 	int ret;
@@ -2717,7 +2718,7 @@ static int mt6360_set_shipping_mode(struct mt6360_pmu_chg_info *mpci)
 		goto out;
 	}
 
-	data = 0x80;
+	data = 0xc0;//Enter shipping mode after 18s 
 	/* enter shipping mode and disable cfo_en/chg_en */
 	ret = i2c_smbus_write_i2c_block_data(mpi->i2c,
 					     MT6360_PMU_CHG_CTRL2, 1, &data);
@@ -2863,7 +2864,7 @@ static int mt6360_pmu_chg_probe(struct platform_device *pdev)
 		ret = PTR_ERR(mpci->chg_dev);
 		goto err_mutex_init;
 	}
-
+	g_chg_dev = mpci->chg_dev;
 	/* irq register */
 	mt6360_pmu_chg_irq_register(pdev);
 	device_init_wakeup(&pdev->dev, true);
@@ -2904,6 +2905,14 @@ static int mt6360_pmu_chg_probe(struct platform_device *pdev)
 && !defined(CONFIG_TCPC_CLASS)
 	schedule_work(&mpci->chgdet_work);
 #endif /* CONFIG_MT6360_PMU_CHARGER_TYPE_DETECT && !CONFIG_TCPC_CLASS */
+
+	/* set term current */
+	ret = mt6360_set_ieoc(mpci->chg_dev, 400000);
+	if (ret < 0) {
+		dev_err(mpci->dev, "%s: set term current fail\n", __func__);
+		return ret;
+	}
+
 	dev_info(&pdev->dev, "%s: successfully probed\n", __func__);
 	return 0;
 err_shipping_mode_attr:

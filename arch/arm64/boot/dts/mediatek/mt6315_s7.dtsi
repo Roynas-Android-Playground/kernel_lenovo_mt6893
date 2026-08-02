@@ -21,6 +21,7 @@
 		regulator-min-microvolt = <300000>;
 		regulator-max-microvolt = <1193750>;
 		regulator-enable-ramp-delay = <256>;
+
 	};
 	mt6315_7_vbuck3: 7_vbuck3 {
 		regulator-name = "7_vbuck3";

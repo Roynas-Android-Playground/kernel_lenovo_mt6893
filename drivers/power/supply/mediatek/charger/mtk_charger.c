@@ -77,7 +77,15 @@
 static struct charger_manager *pinfo;
 static struct list_head consumer_head = LIST_HEAD_INIT(consumer_head);
 static DEFINE_MUTEX(consumer_mutex);
-
+int g_sw_jeita_sm;
+enum {
+	BATTERY_CAPACITY_UNKNOW = 0,
+	BATTERY_CAPACITY_ABOVE_60,
+	BATTERY_CAPACITY_40_TO_60,
+	BATTERY_CAPACITY_UNDER_40,
+};
+extern int battery_protected_enable;
+static int g_uisoc_capacity = BATTERY_CAPACITY_UNKNOW;
 
 bool mtk_is_TA_support_pd_pps(struct charger_manager *pinfo)
 {
@@ -946,6 +954,8 @@ void sw_jeita_state_machine_init(struct charger_manager *info)
 		else
 			sw_jeita->sm = TEMP_BELOW_T0;
 
+		g_sw_jeita_sm = sw_jeita->sm;
+
 		chr_err("[SW_JEITA] tmp:%d sm:%d\n",
 			info->battery_temp, sw_jeita->sm);
 	}
@@ -1042,6 +1052,7 @@ void do_sw_jeita_state_machine(struct charger_manager *info)
 		sw_jeita->sm = TEMP_BELOW_T0;
 		sw_jeita->charging = false;
 	}
+	g_sw_jeita_sm  = sw_jeita->sm;
 
 	/* set CV after temperature changed */
 	/* In normal range, we adjust CV dynamically */
@@ -1394,6 +1405,7 @@ static int mtk_charger_plug_out(struct charger_manager *info)
 	charger_dev_set_input_current(info->chg1_dev, 100000);
 	charger_dev_set_mivr(info->chg1_dev, info->data.min_charger_voltage);
 	charger_dev_plug_out(info->chg1_dev);
+	g_uisoc_capacity = BATTERY_CAPACITY_UNKNOW;
 	return 0;
 }
 
@@ -1686,12 +1698,40 @@ static void charger_check_status(struct charger_manager *info)
 	bool charging = true;
 	int temperature = 0;
 	struct battery_thermal_protection_data *thermal = NULL;
+	union power_supply_propval val = {0, };
+	struct power_supply *bat_psy = NULL;
 
 	if (mt_get_charger_type() == CHARGER_UNKNOWN)
 		return;
 
 	temperature = info->battery_temp;
 	thermal = &info->thermal;
+
+	if (battery_protected_enable == 1) {
+		bat_psy = power_supply_get_by_name("battery");
+		if (bat_psy) {
+			if (power_supply_get_property(bat_psy, POWER_SUPPLY_PROP_CAPACITY, &val)) {
+				printk(KERN_DEBUG "%s:bat_psy get CAPACITY failed!\n",__func__);
+			} else {
+				if (val.intval > 60) {
+					charging = false;
+					g_uisoc_capacity = BATTERY_CAPACITY_ABOVE_60;
+				} else if (val.intval < 40) {
+					charging = true;
+					g_uisoc_capacity = BATTERY_CAPACITY_UNDER_40;
+				} else {
+					if(g_uisoc_capacity == BATTERY_CAPACITY_ABOVE_60){
+						charging = false;
+					}else{
+						if (g_uisoc_capacity != BATTERY_CAPACITY_UNDER_40){
+							charging = false;
+							g_uisoc_capacity = BATTERY_CAPACITY_40_TO_60;
+						}
+					}
+				}
+			}
+		}
+	}
 
 	if (info->enable_sw_jeita == true) {
 		do_sw_jeita_state_machine(info);
@@ -1954,7 +1994,6 @@ static int charger_routine_thread(void *arg)
 			__func__, info->charger_thread_timeout);
 		mutex_unlock(&info->charger_lock);
 	}
-
 	return 0;
 }
 
@@ -2718,7 +2757,7 @@ static int mtk_charger_parse_dt(struct charger_manager *info,
 	return 0;
 }
 
-
+extern bool g_is_pps_ta(void);
 static ssize_t show_Pump_Express(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2743,6 +2782,9 @@ static ssize_t show_Pump_Express(struct device *dev,
 	}
 
 	if (mtk_is_TA_support_pd_pps(pinfo) == true)
+		is_ta_detected = 1;
+
+	if (true == g_is_pps_ta())
 		is_ta_detected = 1;
 
 	pr_debug("%s: detected = %d, pe20_connect = %d, pe_connect = %d\n",
@@ -2921,6 +2963,45 @@ static ssize_t show_ADC_Charger_Voltage(struct device *dev,
 
 static DEVICE_ATTR(ADC_Charger_Voltage, 0444, show_ADC_Charger_Voltage, NULL);
 
+static ssize_t show_Battery_Tempture(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int temp = 26;
+	struct power_supply *gauge_psy = NULL;
+	union power_supply_propval val = {0, };
+	int ret;
+	gauge_psy = power_supply_get_by_name("bq27541");
+	if(gauge_psy){
+		ret = power_supply_get_property(gauge_psy,POWER_SUPPLY_PROP_TEMP,&val);
+	}
+	if(!ret){
+		temp = val.intval;
+	}
+	pr_debug("[%s]: %d\n", __func__, temp);
+	return sprintf(buf, "%d\n", temp);
+}
+
+static DEVICE_ATTR(Battery_Tempture, 0444, show_Battery_Tempture, NULL);
+
+static ssize_t show_Battery_Present(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int present = 1;
+	struct power_supply *gauge_psy = NULL;
+	union power_supply_propval val = {0, };
+	int ret;
+	gauge_psy = power_supply_get_by_name("bq27541");
+	if(gauge_psy){
+		ret = power_supply_get_property(gauge_psy,POWER_SUPPLY_PROP_PRESENT,&val);
+	}
+	if(!ret){
+		present = val.intval;
+	}
+	pr_debug("[%s]: %d\n", __func__, present);
+	return sprintf(buf, "%d\n", present);
+}
+
+static DEVICE_ATTR(Battery_Present, 0444, show_Battery_Present, NULL);
 /* procfs */
 static int mtk_chg_current_cmd_show(struct seq_file *m, void *data)
 {
@@ -3124,6 +3205,13 @@ static int mtk_charger_setup_files(struct platform_device *pdev)
 	if (ret)
 		goto _out;
 
+	ret = device_create_file(&(pdev->dev), &dev_attr_Battery_Tempture);
+	if (ret)
+		goto _out;
+
+	ret = device_create_file(&(pdev->dev), &dev_attr_Battery_Present);
+	if (ret)
+		goto _out;
 	battery_dir = proc_mkdir("mtk_battery_cmd", NULL);
 	if (!battery_dir) {
 		chr_err("[%s]: mkdir /proc/mtk_battery_cmd failed\n", __func__);
@@ -3844,6 +3932,7 @@ static ssize_t store_sc_test(
 static DEVICE_ATTR(sc_test, 0664,
 	show_sc_test, store_sc_test);
 
+bool *pcmd_discharging = NULL;
 static int mtk_charger_probe(struct platform_device *pdev)
 {
 	struct charger_manager *info = NULL;
@@ -3864,6 +3953,7 @@ static int mtk_charger_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	pinfo = info;
+	pcmd_discharging = &info->cmd_discharging;
 
 	platform_set_drvdata(pdev, info);
 	info->pdev = pdev;

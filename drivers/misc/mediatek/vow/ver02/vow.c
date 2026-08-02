@@ -171,6 +171,8 @@ static struct
 	unsigned int         vow_mic_number;
 	char                 alexa_engine_version[VOW_ENGINE_INFO_LENGTH_BYTE];
 	char                 google_engine_arch[VOW_ENGINE_INFO_LENGTH_BYTE];
+	unsigned int         custom_model_addr;
+	unsigned long        custom_model_size;
 } vowserv;
 
 struct vow_dump_info_t {
@@ -179,7 +181,7 @@ struct vow_dump_info_t {
 	uint32_t      size;               // size of reseved buffer (bytes)
 	uint32_t      scp_dump_offset[VOW_MAX_CH_NUM]; // return data offset from scp
 	uint32_t      scp_dump_size[VOW_MAX_CH_NUM];   // return data size from scp
-	short         *kernel_dump_addr;  // kernel internal buffer address
+	char         *kernel_dump_addr;  // kernel internal buffer address
 	unsigned int  kernel_dump_idx;    // current index of kernel_dump_addr
 	unsigned int  kernel_dump_size;   // size of kernel_dump_ptr buffer (bytes)
 	unsigned long user_dump_addr;     // addr of user dump buffer
@@ -563,6 +565,8 @@ static void vow_service_Init(void)
 		vowserv.dump_pcm_flag = false;
 		vowserv.split_dumpfile_flag = false;
 		vowserv.interleave_pcmdata_ptr = NULL;
+		vowserv.custom_model_addr = 0;
+		vowserv.custom_model_size = 0;
 		// update here when vow support more than 2 mic
 		vowserv.vow_mic_number = VOW_MAX_MIC_NUM;
 		vow_pcm_dump_init();
@@ -885,6 +889,8 @@ static bool vow_service_SetCustomModel(unsigned long arg)
 		VOWDRV_DEBUG("vow copy cust model fail\n");
 		return false;
 	}
+	vowserv.custom_model_addr = (unsigned int)p_mdl_p;
+	vowserv.custom_model_size = (unsigned long)data_size;
 	vow_ipi_buf[0] = (unsigned int)p_mdl_p;
 	vow_ipi_buf[1] = (unsigned long)data_size;
 	ret = vow_ipi_send(IPIMSG_VOW_SET_CUSTOM_MODEL,
@@ -1394,7 +1400,7 @@ static void vow_service_GetVowDumpData(void)
 					size = temp_dump_info.scp_dump_size[0] * 2;
 				}
 				vow_interleaving(
-					&temp_dump_info.kernel_dump_addr[idx],
+					(short *)(&temp_dump_info.kernel_dump_addr[idx]),
 					(short *)(temp_dump_info.vir_addr +
 						temp_dump_info.scp_dump_offset[0]),
 					(short *)(temp_dump_info.vir_addr +
@@ -2932,6 +2938,8 @@ static int vow_scp_recover_event(struct notifier_block *this,
 	switch (event) {
 	case SCP_EVENT_READY: {
 		int I;
+		bool ret = false;
+		unsigned int vow_ipi_buf[2];
 
 		vowserv.vow_recovering = true;
 		vowserv.scp_recovering = false;
@@ -2955,10 +2963,18 @@ static int vow_scp_recover_event(struct notifier_block *this,
 			if (!vow_service_SendSpeakerModel(I, VOW_SET_MODEL))
 				VOWDRV_DEBUG("fail: SendSpeakerModel\n");
 		}
+		// send AEC custom model
+		vow_ipi_buf[0] = vowserv.custom_model_addr;
+		vow_ipi_buf[1] = vowserv.custom_model_size;
+		ret = vow_ipi_send(IPIMSG_VOW_SET_CUSTOM_MODEL,
+				   2, &vow_ipi_buf[0], VOW_IPI_BYPASS_ACK);
+		if (!ret)
+			VOWDRV_DEBUG("fail: vow_service_SetCustomModel\n");
 
 		/* if vow is not enable, then return */
 		if (VowDrv_GetHWStatus() != VOW_PWR_ON) {
 			vowserv.vow_recovering = false;
+			VOWDRV_DEBUG("fail: vow not enable\n");
 			break;
 		}
 		if (vowserv.scp_recovering) {
