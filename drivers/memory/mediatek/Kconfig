@@ -25,7 +25,8 @@ config MEDIATEK_BOOT_HW_DIAG
 	  boot. The diagnostic is disabled unless the mtk_hwdiag=cache or
 	  mtk_hwdiag=full kernel command-line parameter is supplied. It logs
 	  raw ARM RAS records around every test phase so cache ECC events can
-	  be correlated with the CPU and workload that exposed them.
+	  be correlated with the CPU and workload that exposed them, and marks
+	  a phase failed when either sampled record is valid.
 
 config MEDIATEK_EMI
 	tristate "MediaTek EMI driver"

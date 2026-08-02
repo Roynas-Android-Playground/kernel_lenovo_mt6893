@@ -2382,7 +2382,8 @@
 			full: additionally exercise flushed DRAM-sized buffers
 			and run a parallel per-CPU cache/power stress pass.
 			The diagnostic logs raw ARM RAS records before and after
-			each phase. It is disabled when this option is omitted.
+			each phase; a valid RAS record fails that phase. It is
+			disabled when this option is omitted.
 
 	mem_encrypt=	[X86-64] AMD Secure Memory Encryption (SME) control
 			Valid arguments: on, off

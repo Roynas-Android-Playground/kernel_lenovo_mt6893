@@ -30,6 +30,7 @@
 #define HWDIAG_PARALLEL_PASSES	256
 
 #define ERXSTATUS_UE_BIT		(1ULL << 29)
+#define ERXSTATUS_V_BIT		(1ULL << 30)
 #define ERXSTATUS_CE_MASK	(3ULL << 24)
 #define ERXSTATUS_DE_BIT		(1ULL << 23)
 
@@ -109,13 +110,14 @@ static inline u64 hwdiag_read_erxmisc0(void)
 	return value;
 }
 
-static void hwdiag_log_ras(const char *phase)
+static bool hwdiag_log_ras(const char *phase)
 {
 	struct hwdiag_ras_record record[2];
 	unsigned long flags;
 	u64 old_selector;
 	int cpu = raw_smp_processor_id();
 	unsigned int selector;
+	bool error = false;
 
 	local_irq_save(flags);
 	old_selector = hwdiag_read_erxselr();
@@ -130,13 +132,19 @@ static void hwdiag_log_ras(const char *phase)
 	for (selector = 0; selector < ARRAY_SIZE(record); selector++) {
 		u64 status = record[selector].status;
 
-		pr_notice("MTK-HWDIAG: cpu%d %s record%u status=%016llx misc0=%016llx CE=%llu UE=%llu DE=%llu\n",
+		if (status & ERXSTATUS_V_BIT)
+			error = true;
+		pr_notice("MTK-HWDIAG: cpu%d %s record%u "
+			  "status=%016llx misc0=%016llx CE=%u UE=%u DE=%u\n",
 			  cpu, phase, selector, status,
 			  record[selector].misc0,
-			  (status & ERXSTATUS_CE_MASK) >> 24,
-			  !!(status & ERXSTATUS_UE_BIT),
-			  !!(status & ERXSTATUS_DE_BIT));
+			  (unsigned int)
+				((status & ERXSTATUS_CE_MASK) >> 24),
+			  (unsigned int)!!(status & ERXSTATUS_UE_BIT),
+			  (unsigned int)!!(status & ERXSTATUS_DE_BIT));
 	}
+
+	return error;
 }
 
 static u64 hwdiag_expected(unsigned int pass, size_t index)
@@ -157,11 +165,12 @@ static int hwdiag_test_buffer(struct hwdiag_test *test)
 	size_t words = test->bytes / sizeof(*test->buffer);
 	unsigned int pass;
 	int cpu = raw_smp_processor_id();
+	bool ras_error;
 
 	pr_notice("MTK-HWDIAG: cpu%d start %s bytes=%zu passes=%u flush=%u\n",
 		  cpu, test->name, test->bytes, test->passes,
 		  test->flush_to_poc);
-	hwdiag_log_ras("before");
+	ras_error = hwdiag_log_ras("before");
 
 	for (pass = 0; pass < test->passes; pass++) {
 		size_t index;
@@ -194,7 +203,12 @@ static int hwdiag_test_buffer(struct hwdiag_test *test)
 		cond_resched();
 	}
 
-	hwdiag_log_ras("after");
+	ras_error |= hwdiag_log_ras("after");
+	if (ras_error) {
+		pr_emerg("MTK-HWDIAG: FAIL cpu%d %s: valid RAS record\n",
+			 cpu, test->name);
+		return -EIO;
+	}
 	pr_notice("MTK-HWDIAG: cpu%d pass %s\n", cpu, test->name);
 	return 0;
 }
