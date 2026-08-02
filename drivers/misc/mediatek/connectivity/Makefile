@@ -80,9 +80,17 @@ endif
         PATH_TO_WLAN_CHR_DRV = vendor/mediatek/kernel_modules/connectivity/wlan/adaptor
         PATH_TO_WLAN_DRV     = vendor/mediatek/kernel_modules/connectivity/wlan/core/gen4m
 
-        ABS_PATH_TO_WMT_DRV      = $(srctree)/../$(PATH_TO_WMT_DRV)
-        ABS_PATH_TO_WLAN_CHR_DRV = $(srctree)/../$(PATH_TO_WLAN_CHR_DRV)
-        ABS_PATH_TO_WLAN_DRV     = $(srctree)/../$(PATH_TO_WLAN_DRV)
+        # Prefer the versioned in-tree subtrees, while retaining support for
+        # MediaTek's original Android layout with vendor/ beside the kernel.
+        ifneq (,$(wildcard $(srctree)/$(PATH_TO_WMT_DRV)))
+            CONNECTIVITY_ROOT := $(srctree)
+        else
+            CONNECTIVITY_ROOT := $(srctree)/..
+        endif
+
+        ABS_PATH_TO_WMT_DRV      = $(CONNECTIVITY_ROOT)/$(PATH_TO_WMT_DRV)
+        ABS_PATH_TO_WLAN_CHR_DRV = $(CONNECTIVITY_ROOT)/$(PATH_TO_WLAN_CHR_DRV)
+        ABS_PATH_TO_WLAN_DRV     = $(CONNECTIVITY_ROOT)/$(PATH_TO_WLAN_DRV)
 
         # check wlan driver folder
         ifeq (,$(wildcard $(ABS_PATH_TO_WMT_DRV)))
@@ -147,7 +155,7 @@ endif
         # else
         #     PATH_TO_BT_DRV       = vendor/mediatek/kernel_modules/connectivity/bt/mt66xx/wmt
         # endif
-        # ABS_PATH_TO_BT_DRV       = $(srctree)/../$(PATH_TO_BT_DRV)
+        # ABS_PATH_TO_BT_DRV       = $(CONNECTIVITY_ROOT)/$(PATH_TO_BT_DRV)
         # $(shell unlink $(srctree)/$(src)/bt)
         # $(shell ln -s $(ABS_PATH_TO_BT_DRV)      $(srctree)/$(src)/bt)
         # obj-y += bt/
@@ -171,7 +179,7 @@ endif
         # export CFG_FM_CHIP_ID=$(MTK_PLATFORM_ID)
         # export CFG_FM_CHIP=$(FM_CHIP)
         # PATH_TO_FMRADIO_DRV       = vendor/mediatek/kernel_modules/connectivity/fmradio
-        # ABS_PATH_TO_FMRADIO_DRV  = $(srctree)/../$(PATH_TO_FMRADIO_DRV)
+        # ABS_PATH_TO_FMRADIO_DRV  = $(CONNECTIVITY_ROOT)/$(PATH_TO_FMRADIO_DRV)
         # $(shell unlink $(srctree)/$(src)/fmradio)
         # $(shell ln -s $(ABS_PATH_TO_FMRADIO_DRV)      $(srctree)/$(src)/fmradio)
         # obj-y += fmradio/
@@ -179,7 +187,7 @@ endif
 
         # For GPS built-in mode start @{
         # PATH_TO_GPS_DRV      = vendor/mediatek/kernel_modules/connectivity/gps
-        # ABS_PATH_TO_GPS_DRV      = $(srctree)/../$(PATH_TO_GPS_DRV)
+        # ABS_PATH_TO_GPS_DRV      = $(CONNECTIVITY_ROOT)/$(PATH_TO_GPS_DRV)
         # ifeq (,$(wildcard $(ABS_PATH_TO_GPS_DRV)))
         #     $(error $(ABS_PATH_TO_GPS_DRV) is not existed)
         # endif
