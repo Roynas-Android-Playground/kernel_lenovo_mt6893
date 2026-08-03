@@ -1309,25 +1309,11 @@ int charger_psy_event(struct notifier_block *nb, unsigned long event, void *v)
 	struct charger_manager *info =
 			container_of(nb, struct charger_manager, psy_nb);
 	struct power_supply *psy = v;
-	union power_supply_propval val;
-	int ret;
-	int tmp = 0;
 
-	if (strcmp(psy->desc->name, "battery") == 0) {
-		ret = power_supply_get_property(psy,
-				POWER_SUPPLY_PROP_TEMP, &val);
-		if (!ret) {
-			tmp = val.intval / 10;
-			if (info->battery_temp != tmp
-			    && mt_get_charger_type() != CHARGER_UNKNOWN) {
-				_wake_up_charger(info);
-				chr_err("%s: %ld %s tmp:%d %d chr:%d\n",
-					__func__, event, psy->desc->name, tmp,
-					info->battery_temp,
-					mt_get_charger_type());
-			}
-		}
-	}
+	/* Atomic notifier callbacks must not call sleepable property getters. */
+	if (!strcmp(psy->desc->name, "battery") &&
+	    READ_ONCE(info->chr_type) != CHARGER_UNKNOWN)
+		_wake_up_charger(info);
 
 	return NOTIFY_DONE;
 }

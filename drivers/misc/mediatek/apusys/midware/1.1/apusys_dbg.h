@@ -14,6 +14,9 @@
 #ifndef __APUSYS_DEBUG_H__
 #define __APUSYS_DEBUG_H__
 
+struct device;
+struct seq_file;
+
 extern bool apusys_dump_force;
 extern bool apusys_dump_skip;
 

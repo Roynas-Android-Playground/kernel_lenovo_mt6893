@@ -864,11 +864,11 @@ done:
 	CMDQ_TRACE_FORCE_END();
 
 	exec_cost = div_u64(sched_clock() - exec_cost, 1000);
-	if (exec_cost > 3000)
-		CMDQ_LOG("[warn]%s job:%u cost translate:%lluus exec:%lluus\n",
+	if (exec_cost > 20000)
+		CMDQ_LOG("[warn]%s meta:%u cost translate:%lluus exec:%lluus\n",
 			__func__, user_job.meta_count, trans_cost, exec_cost);
 	else
-		CMDQ_MSG("%s job:%u cost translate:%lluus exec:%lluus\n",
+		CMDQ_VERBOSE("%s meta:%u cost translate:%lluus exec:%lluus\n",
 			__func__, user_job.meta_count, trans_cost, exec_cost);
 
 	return status;

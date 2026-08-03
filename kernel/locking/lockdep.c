@@ -191,7 +191,8 @@ static const char * const held_lock_white_list[] = {
 	"&session->notif_wait_lock",
 	"(&item_q->work)",
 	"\"%s\"\"cmdq_flushq\"",
-	"\"events\"" /* aee workqueue */
+	"\"events\"", /* aee workqueue */
+	"(&pipe->mutex/1)" /* FUSE splice waits with its output pipe locked */
 };
 
 #define lock_mon_enabled()	lock_mon_enable

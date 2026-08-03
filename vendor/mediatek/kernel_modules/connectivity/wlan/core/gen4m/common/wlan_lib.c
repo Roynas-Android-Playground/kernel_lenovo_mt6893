@@ -1559,7 +1559,8 @@ void wlanIST(IN struct ADAPTER *prAdapter, bool fgEnInt)
 
 	if (prAdapter->fgIsFwOwn == FALSE) {
 		u4Status = nicProcessIST(prAdapter);
-		if (u4Status != WLAN_STATUS_SUCCESS) {
+		if (u4Status != WLAN_STATUS_SUCCESS &&
+		    u4Status != WLAN_STATUS_NOT_INDICATING) {
 			DBGLOG(REQ, INFO, "Fail: nicProcessIST! status [%x]\n",
 			       u4Status);
 		}

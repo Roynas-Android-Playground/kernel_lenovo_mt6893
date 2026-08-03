@@ -1354,23 +1354,8 @@ again:
 
 static void __ref do_core_ctl(struct cluster_data *cluster)
 {
-	unsigned int need;
-
-	need = apply_limits(cluster, cluster->need_cpus);
-
-	if (adjustment_possible(cluster, need)) {
-		core_ctl_debug("%s: Trying to adjust group %u from %u to %u\n",
-				TAG, cluster->first_cpu,
-				cluster->active_cpus, need);
-
-		if (cluster->active_cpus > need)
-			try_to_isolate(cluster, need);
-		else if (cluster->active_cpus < need)
-			try_to_unisolate(cluster, need);
-	} else
-		core_ctl_debug("%s: failed to adjust group %u from %u to %u.  need_cpus=%u min_cpus=%u max_cpus=%u\n",
-		TAG, cluster->first_cpu, cluster->active_cpus, need,
-		cluster->need_cpus, cluster->min_cpus, cluster->max_cpus);
+	/* Disabled temporarily to isolate core_ctl from the ECC failure path. */
+	(void)cluster;
 }
 
 static int __ref try_core_ctl(void *data)

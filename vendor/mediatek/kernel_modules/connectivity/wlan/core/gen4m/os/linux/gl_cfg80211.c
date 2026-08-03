@@ -697,7 +697,7 @@ int mtk_cfg80211_get_station(struct wiphy *wiphy,
 	 */
 	if ((rStatus != WLAN_STATUS_SUCCESS) || (u4TxRate == 0)) {
 		/* unable to retrieve link speed */
-		DBGLOG(REQ, WARN, "last Tx link speed\n");
+		DBGLOG(REQ, TRACE, "use last Tx link speed\n");
 	} else {
 		/* convert from 100bps to 100kbps */
 		prGlueInfo->u4TxLinkSpeedCache[ucBssIndex] = u4TxRate / 1000;
@@ -705,7 +705,7 @@ int mtk_cfg80211_get_station(struct wiphy *wiphy,
 
 	if ((rStatus != WLAN_STATUS_SUCCESS) || (u4RxRate == 0)) {
 		/* unable to retrieve link speed */
-		DBGLOG(REQ, WARN, "last Rx link speed\n");
+		DBGLOG(REQ, TRACE, "use last Rx link speed\n");
 	} else {
 		/* convert from 100bps to 100kbps */
 		prGlueInfo->u4RxLinkSpeedCache[ucBssIndex] = u4RxRate / 1000;
@@ -714,7 +714,7 @@ int mtk_cfg80211_get_station(struct wiphy *wiphy,
 	}
 
 	if (rStatus != WLAN_STATUS_SUCCESS || i4Rssi == 0) {
-		DBGLOG(REQ, WARN,
+		DBGLOG(REQ, TRACE,
 			"Query RSSI failed, use last RSSI %d\n",
 			prGlueInfo->i4RssiCache[ucBssIndex]);
 		sinfo->signal = prGlueInfo->i4RssiCache[ucBssIndex] ?
