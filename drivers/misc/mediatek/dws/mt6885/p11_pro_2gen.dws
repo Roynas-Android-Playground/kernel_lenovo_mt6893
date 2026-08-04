@@ -1404,7 +1404,8 @@
                 <ies>true</ies>
             </gpio182>
             <gpio183>
-                <smt>true</smt>
+                <def_dir>OUT</def_dir>
+                <smt>false</smt>
             </gpio183>
             <gpio184>
                 <eint_mode>false</eint_mode>
@@ -1981,8 +1982,8 @@
             <keyMatrix_ext>NC NC NC NC
 				NC NC NC NC
 				NC NC NC NC</keyMatrix_ext>
-            <downloadKey>VOLUMEUP VOLUMEDOWN POWER</downloadKey>
-            <modeKey>NC VOLUMEUP NC</modeKey>
+            <downloadKey>VOLUMEDOWN VOLUMEUP POWER</downloadKey>
+            <modeKey>NC VOLUMEUP VOLUMEDOWN</modeKey>
             <pwrKeyEint_gpioNum>0</pwrKeyEint_gpioNum>
             <pwrKeyUtility>POWER</pwrKeyUtility>
             <home_key>VOLUMEDOWN</home_key>

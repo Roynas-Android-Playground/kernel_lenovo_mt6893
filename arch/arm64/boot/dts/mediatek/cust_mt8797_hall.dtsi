@@ -1,6 +1,6 @@
 &odm{
-	hall_switch: hall_switch {
-	   compatible = "p11,hall";
+		hall_switch {
+		   compatible = "hall-switch";
 	   hall,irq-gpio = <&pio 19 0x00>;
     };
 };

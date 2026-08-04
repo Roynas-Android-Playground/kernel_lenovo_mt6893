@@ -11,6 +11,13 @@ ifeq ($(strip $(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE)), y)
 dtb-y += $(addsuffix .dtb, $(notdir $(subst $\",,$(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES))))
 endif
 
-always		:= $(dtb-y)
+ifeq ($(strip $(subst $\",,$(CONFIG_ARCH_MTK_PROJECT))),p11_pro_2gen)
+dtbo-y += p11_pro_2gen.dtbo
+endif
+
+always		:= $(dtb-y) $(dtbo-y)
 subdir-y	:= $(dts-dirs)
-clean-files	:= *.dtb
+clean-files	:= *.dtb *.dtbo
+
+$(obj)/%.dtbo: $(src)/%.dts FORCE
+	$(call if_changed_dep,dtc)

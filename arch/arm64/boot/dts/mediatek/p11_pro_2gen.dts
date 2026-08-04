@@ -169,7 +169,7 @@
 	mcu_rst_gpio = <&pio 147 0>;
 	mcu_hall_int_gpio = <&pio 159 0>;
 	interrupt-parent = <&pio>;
-	interrupts = <157 IRQ_TYPE_EDGE_FALLING 157 0>;
+	interrupts = <157 IRQ_TYPE_LEVEL_LOW 157 0>;
 	interrupt-names = "keyboard_tp_irq";
 	hid-descr-addr =<0x0001>;
 	post-power-on-delay-ms= <100>;
@@ -216,6 +216,12 @@
 		sc,sc8551,ac-ovp-threshold = <17>;
 		sc,sc8551,sense-resistor-mohm = <5>;
 	};
+};
+
+
+&i2c8 {
+	status="okay";
+	clock-frequency = <400000>;
 
 	ln8000_charger@51 {
 		compatible = "lionsemi,ln8000";
@@ -255,7 +261,7 @@
 		 reg = <0x61>;
 		 vfp-supply = <&mt_pmic_vfp_ldo_reg>;
 		 interrupt-parent = <&pio>;
-		 interrupts = <156 IRQ_TYPE_EDGE_FALLING 156 0>;
+		 interrupts = <156 IRQ_TYPE_LEVEL_LOW 156 0>;
 		 interrupt-names = "keyboard_kb_irq";
 		 hid-descr-addr =<0x0001>;
 		 mcu_en_gpio = <&pio 185 0>;

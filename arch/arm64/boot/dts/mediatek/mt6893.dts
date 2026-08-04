@@ -6007,7 +6007,7 @@ page_owner=on loop.max_part=7";
 
 	memory_ssmr_features: memory-ssmr-features {
 		compatible = "mediatek,memory-ssmr-features";
-		svp-region-based-size = <0 0x18000000>;
+		svp-region-based-size = <0 0x29000000>;
 		iris-recognition-size = <0 0x10000000>;
 		2d_fr-size = <0 0>;
 		tui-size = <0 0x4000000>;
@@ -7529,16 +7529,16 @@ page_owner=on loop.max_part=7";
 		enable_pd20_reset;
 		power_path_support;
 		max_charger_voltage = <6500000>;
-		fast_charge_voltage = <3000000>;
+		fast_charge_voltage = <2900000>;
 
 		/* charging current */
 		usb_charger_current = <500000>;
-		ac_charger_current = <2050000>;
+		ac_charger_current = <2100000>;
 		ac_charger_input_current = <3200000>;
-		non_std_ac_charger_current = <500000>;
-		charging_host_charger_current = <1500000>;
+		non_std_ac_charger_current = <1500000>;
+		charging_host_charger_current = <1650000>;
 		ta_ac_charger_current = <3000000>;
-		pd_charger_current = <500000>;
+		pd_charger_current = <1500000>;
 
 		/* battery temperature protection */
 		temp_t4_threshold = <50>;
@@ -7560,23 +7560,23 @@ page_owner=on loop.max_part=7";
 
 		/* common */
 		battery_cv = <4450000>;
-		max_charger_voltage = <11000000>;
+		max_charger_voltage = <14500000>;
 		min_charger_voltage = <4600000>;
 
 		/* dynamic mivr */
 		min_charger_voltage_1 = <4400000>;
 		min_charger_voltage_2 = <4200000>;
-		max_dmivr_charger_current = <1400000>;
+		max_dmivr_charger_current = <2000000>;
 
 		/* charging current */
 		usb_charger_current_suspend = <0>;
 		usb_charger_current_unconfigured = <70000>;
 		usb_charger_current_configured = <500000>;
 		usb_charger_current = <500000>;
-		ac_charger_current = <2050000>;
-		ac_charger_input_current = <3200000>;
+		ac_charger_current = <3700000>;
+		ac_charger_input_current = <2100000>;
 		non_std_ac_charger_current = <500000>;
-		charging_host_charger_current = <1500000>;
+		charging_host_charger_current = <1650000>;
 		apple_1_0a_charger_current = <650000>;
 		apple_2_1a_charger_current = <800000>;
 		ta_ac_charger_current = <3700000>;
@@ -7591,13 +7591,13 @@ page_owner=on loop.max_part=7";
 		temp_t4_thres = <50>;
 		temp_t4_thres_minus_x_degree = <48>;
 		temp_t3_thres = <45>;
-		temp_t3_thres_minus_x_degree = <44>;
+		temp_t3_thres_minus_x_degree = <43>;
 		temp_t2_thres = <15>;
 		temp_t2_thres_plus_x_degree = <16>;
-		temp_t1_thres = <0>;
-		temp_t1_thres_plus_x_degree = <2>;
+		temp_t1_thres = <5>;
+		temp_t1_thres_plus_x_degree = <6>;
 		temp_t0_thres = <0>;
-		temp_t0_thres_plus_x_degree = <0>;
+		temp_t0_thres_plus_x_degree = <1>;
 		temp_neg_10_thres = <0>;
 
 		/* battery temperature protection */
@@ -7608,12 +7608,11 @@ page_owner=on loop.max_part=7";
 		max_charge_temp_minus_x_degree = <48>;
 
 		/* PE */
-		ta_12v_support;
 		ta_9v_support;
 		pe_ichg_level_threshold = <1000000>; /* uA */
-		ta_ac_12v_input_current = <3200000>;
-		ta_ac_9v_input_current = <3200000>;
-		ta_ac_7v_input_current = <3200000>;
+		ta_ac_12v_input_current = <2100000>;
+		ta_ac_9v_input_current = <2100000>;
+		ta_ac_7v_input_current = <2100000>;
 
 		/* PE 2.0 */
 		pe20_ichg_level_threshold = <1000000>; /* uA */
@@ -7658,7 +7657,7 @@ page_owner=on loop.max_part=7";
 
 		/* PD */
 		pd_vbus_low_bound = <5000000>;
-		pd_vbus_upper_bound = <5000000>;
+		pd_vbus_upper_bound = <11000000>;
 		pd_ichg_level_threshold = <1000000>; /* uA */
 		pd_stop_battery_soc = <80>;
 
