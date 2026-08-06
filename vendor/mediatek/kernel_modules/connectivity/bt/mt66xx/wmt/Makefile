@@ -23,8 +23,6 @@ KBUILD_MODPOST_FAIL_ON_WARNINGS := y
 
 # platform
 ccflags-y += -D CONNAC1X_CHIPID=$(BT_PLATFORM)
-$(info $(LOG_TAG) BT_PLATFORM = $(BT_PLATFORM))
-$(info $(LOG_TAG) srctree = $(srctree))
 
 
 ###############################################################################

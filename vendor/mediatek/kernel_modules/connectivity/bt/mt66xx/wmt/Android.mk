@@ -12,7 +12,6 @@ BT_OPTS := BT_PLATFORM=$(BT_PLATFORM) LOG_TAG=$(LOG_TAG)
 #ifeq ($(BT_PLATFORM), $(filter $(BT_PLATFORM), 6873 6853 6833))
 #  BT_OPTS += CFG_BT_PM_QOS_CONTROL=y
 #endif
-$(info $(LOG_TAG) BT_OPTS = $(BT_OPTS))
 $(linked_module): OPTS += $(BT_OPTS)
 
 

@@ -51,13 +51,11 @@ ccflags-y += -D CREATE_NODE_DYNAMIC=1
 
 ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
 MODULE_NAME := wmt_chrdev_wifi
-$(warning $(MODULE_NAME) build-in boot.img)
 obj-y += $(MODULE_NAME).o
 else
 ifeq ($(MODULE_NAME),)
 MODULE_NAME := wmt_chrdev_wifi
 endif
-$(warning $(MODULE_NAME) is kernel module)
 obj-m += $(MODULE_NAME).o
 endif
 

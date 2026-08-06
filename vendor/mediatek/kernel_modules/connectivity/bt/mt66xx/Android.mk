@@ -2,8 +2,6 @@ LOCAL_PATH := $(call my-dir)
 LOCAL_PATH_B := $(LOCAL_PATH)
 
 BT_PLATFORM:=$(subst MTK_CONSYS_MT,,$(MTK_BT_CHIP))  
-$(info [BT_Drv] MTK_BT_SUPPORT = $(MTK_BT_SUPPORT))
-$(info [BT_Drv] MTK_BT_CHIP = $(MTK_BT_CHIP))
 
 ifeq ($(strip $(MTK_BT_SUPPORT)), yes)
 ifneq (true,$(strip $(TARGET_NO_KERNEL)))

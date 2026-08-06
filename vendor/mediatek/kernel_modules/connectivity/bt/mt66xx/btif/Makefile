@@ -21,15 +21,11 @@ KBUILD_MODPOST_FAIL_ON_WARNINGS := y
 # platform
 
 ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
-  $(info build-in mode!)
-  $(info _MTK_BT_CHIP = $(_MTK_BT_CHIP))
   # _MTK_BT_CHIP comes from conninfra setting
   BT_PLATFORM = $(patsubst MTK_CONSYS_MT%,%,$(strip $(_MTK_BT_CHIP)))
 endif
 
 ccflags-y += -D CONNAC20_CHIPID=$(BT_PLATFORM)
-$(info $(LOG_TAG) BT_PLATFORM = $(BT_PLATFORM))
-$(info $(LOG_TAG) srctree = $(srctree))
 
 # ---------------------------------------------------
 # Compile Options: set feature flag (1: enable, 0: disable)

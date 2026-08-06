@@ -34,11 +34,9 @@ KO_CODE_PATH := $(if $(filter /%,$(src)),,$(srctree)/)$(src)
 
 MODULE_NAME := conninfra
 ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
-$(warning $(MODULE_NAME) build-in boot.img)
 obj-y += $(MODULE_NAME).o
 PATH_TO_CONNINFRA_DRV := $(srctree)/$(src)
 else
-$(warning $(MODULE_NAME) is kernel module)
 obj-m += $(MODULE_NAME).o
 PATH_TO_CONNINFRA_DRV := $(KO_CODE_PATH)
 endif
@@ -71,7 +69,6 @@ endif
 
 ifeq ($(CONFIG_MTK_COMBO_CHIP_CONSYS_6893),y)
 ifneq ($(wildcard $(PATH_TO_CONNINFRA_DRV)/platform/mt6893),)
-$(warning $(MODULE_NAME) build mt6893)
 ccflags-y += -I$(KO_CODE_PATH)/platform/mt6893/include
 ccflags-y += -I$(KO_CODE_PATH)/platform/mt6893/include/CODA
 endif
@@ -119,7 +116,6 @@ else ifeq ($(TARGET_BUILD_VARIANT),userdebug)
 else ifeq ($(TARGET_BUILD_VARIANT),user)
     ccflags-y += -D CONNINFRA_PLAT_BUILD_MODE=3
 else
-    $(info invalid $$TARGET_BUILD_VARIANT[${TARGET_BUILD_VARIANT}])
     ccflags-y += -D CONNINFRA_PLAT_BUILD_MODE=0
 endif
 
