@@ -70,7 +70,12 @@ static long mtk_lpm_registry_work(void *pData)
 int mtk_lpm_do_work(int type, blockcall call, void *priv)
 {
 	int cpu;
+	int ret = 0;
+	long work_ret;
 	struct mtk_lpm_registry_wk lpm_wk;
+
+	if (!call)
+		return -EINVAL;
 
 	INIT_MTK_LPM_REG_WK(&lpm_wk, type, call, priv);
 	cpuidle_pause_and_lock();
@@ -78,11 +83,13 @@ int mtk_lpm_do_work(int type, blockcall call, void *priv)
 	cpumask_clear(&lpm_wk.cpus);
 
 	for_each_online_cpu(cpu) {
-		work_on_cpu(cpu, mtk_lpm_registry_work, &lpm_wk);
+		work_ret = work_on_cpu(cpu, mtk_lpm_registry_work, &lpm_wk);
+		if (work_ret && !ret)
+			ret = (int)work_ret;
 	}
 
 	cpuidle_resume_and_unlock();
 
-	return 0;
+	return ret;
 }
 

@@ -27,8 +27,17 @@ int __init mtk_lpm_resource_ctrl_parsing(struct device_node *parent)
 	while ((np = of_parse_phandle(parent, MTK_LPM_RESOURCE_NODE, idx))) {
 		idx++;
 
-		of_property_read_u32(np, MTK_LPM_RESOURCE_ID, &id);
-		of_property_read_u32(np, MTK_LPM_RESOURCE_VALUE, &value);
+		id = 0;
+		value = 0;
+		if (of_property_read_u32(np, MTK_LPM_RESOURCE_ID, &id) ||
+		    of_property_read_u32(np, MTK_LPM_RESOURCE_VALUE, &value)) {
+			pr_warn("[name:mtk_lpm][P] - incomplete resource-ctrl node %pOF\n",
+				np);
+			ret = -EINVAL;
+			of_node_put(np);
+			continue;
+		}
+
 		of_node_put(np);
 
 		mtk_lpm_smc_spm_dbg(MT_SPM_DBG_SMC_UID_DOE_RESOURCE_CTRL,

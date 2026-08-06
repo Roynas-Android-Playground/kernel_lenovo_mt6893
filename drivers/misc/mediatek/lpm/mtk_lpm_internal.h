@@ -18,7 +18,7 @@
 		mtk_lpm_system_spin_unlock(&irqfalg); })
 
 
-int mtk_lpm_system_spin_lock(long *irqflag);
-int mtk_lpm_system_spin_unlock(long *irqflag);
+void mtk_lpm_system_spin_lock(unsigned long *irqflag);
+void mtk_lpm_system_spin_unlock(unsigned long *irqflag);
 
 #endif

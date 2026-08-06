@@ -11,7 +11,7 @@
 #include <mtk_lpm_module.h>
 #include <mtk_lpm_internal.h>
 
-#include "mtk_lpm_resource_ctrl.h"
+#include "mtk_lpm_rc.h"
 
 #define MTK_LPM_RC_NODE		"constraints"
 #define MTK_LPM_RC_LISTNODE	"constraint-list"
@@ -27,8 +27,17 @@ int __init mtk_lpm_rc_parsing(struct device_node *parent)
 	while ((np = of_parse_phandle(parent, MTK_LPM_RC_NODE, idx))) {
 		idx++;
 
-		of_property_read_u32(np, MTK_LPM_RC_ID, &id);
-		of_property_read_u32(np, MTK_LPM_RC_VALUE, &value);
+		id = 0;
+		value = 0;
+		if (of_property_read_u32(np, MTK_LPM_RC_ID, &id) ||
+		    of_property_read_u32(np, MTK_LPM_RC_VALUE, &value)) {
+			pr_warn("[name:mtk_lpm][P] - incomplete constraint node %pOF\n",
+				np);
+			ret = -EINVAL;
+			of_node_put(np);
+			continue;
+		}
+
 		of_node_put(np);
 
 		if (!!value)

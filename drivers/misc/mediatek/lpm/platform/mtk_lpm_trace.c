@@ -5,6 +5,7 @@
 
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/io.h>
 #include <linux/of_irq.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -12,15 +13,6 @@
 #include <mtk_lpm_module.h>
 #include <mtk_lpm_internal.h>
 #include <mtk_lpm_trace.h>
-
-
-#define MTK_LPM_TRACE_SYSRAM_MEMCPY_DEST(_offset, _buf, _sz) ({\
-	memcpy(buf, (void *)(mtk_lpm_trace_ins.mmu + _offset),\
-		_sz); })
-
-#define MTK_LPM_TRACE_SYSRAM_MEMCPY_SRC(_offset, _buf, _sz) ({\
-	memcpy((void *)(mtk_lpm_trace_ins.mmu + _offset), buf,\
-		_sz); })
 
 
 struct MTK_LPM_TRACE_INS {
@@ -55,33 +47,34 @@ int __init mtk_lpm_trace_parsing(struct device_node *parent)
 size_t mtk_lpm_trace_sysram_read(unsigned long offset,
 					 void *buf, size_t sz)
 {
-	size_t rSz = 0;
+	size_t rSz;
 
-	if ((offset >= mtk_lpm_trace_ins.size)
-	    || !mtk_lpm_trace_ins.mmu)
-		return -EINVAL;
+	if (!buf || !mtk_lpm_trace_ins.mmu ||
+	    offset >= mtk_lpm_trace_ins.size)
+		return 0;
 
-	rSz = ((offset + sz) < mtk_lpm_trace_ins.size) ?
-		sz : (mtk_lpm_trace_ins.size - offset);
+	rSz = min_t(size_t, sz, mtk_lpm_trace_ins.size - offset);
 
-	MTK_LPM_TRACE_SYSRAM_MEMCPY_DEST(offset, buf, rSz);
+	memcpy_fromio(buf,
+		      (u8 __iomem *)mtk_lpm_trace_ins.mmu + offset,
+		      rSz);
 	return rSz;
 }
 
-size_t mtk_lpm_trace_sysram_wrtie(unsigned long offset,
+size_t mtk_lpm_trace_sysram_write(unsigned long offset,
 					 const void *buf, size_t sz)
 {
-	size_t rSz = 0;
+	size_t rSz;
 
-	if ((offset >= mtk_lpm_trace_ins.size)
-	    || !mtk_lpm_trace_ins.mmu)
-		return -EINVAL;
+	if (!buf || !mtk_lpm_trace_ins.mmu ||
+	    offset >= mtk_lpm_trace_ins.size)
+		return 0;
 
-	rSz = ((offset + sz) < mtk_lpm_trace_ins.size) ?
-		sz : (mtk_lpm_trace_ins.size - offset);
+	rSz = min_t(size_t, sz, mtk_lpm_trace_ins.size - offset);
 
-	MTK_LPM_TRACE_SYSRAM_MEMCPY_SRC(offset, buf, rSz);
-	return 0;
+	memcpy_toio((u8 __iomem *)mtk_lpm_trace_ins.mmu + offset,
+		    buf, rSz);
+	return rSz;
 }
 
 int mtk_lpm_trace_instance_get(int type, struct MTK_LPM_PLAT_TRACE *ins)
@@ -93,7 +86,7 @@ int mtk_lpm_trace_instance_get(int type, struct MTK_LPM_PLAT_TRACE *ins)
 
 	if (type == MT_LPM_PLAT_TRACE_SYSRAM) {
 		ins->read = mtk_lpm_trace_sysram_read;
-		ins->write = mtk_lpm_trace_sysram_wrtie;
+		ins->write = mtk_lpm_trace_sysram_write;
 	} else
 		ret = -EINVAL;
 

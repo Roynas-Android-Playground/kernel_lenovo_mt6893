@@ -15,32 +15,32 @@ static LIST_HEAD(mtk_lpm_callees);
 int mtk_lpm_callee_registry(struct mtk_lpm_callee *callee)
 {
 	struct mtk_lpm_callee *pos;
+	int ret = 0;
 
 	if (!callee)
 		return -EINVAL;
 
 	spin_lock(&mtk_lp_plat_call_locker);
 	list_for_each_entry(pos, &mtk_lpm_callees, list) {
-		if (pos && (pos != callee) &&
-		   (pos->uid == callee->uid)) {
-			pos = NULL;
-			break;
+		if (pos->uid == callee->uid) {
+			ret = -EEXIST;
+			goto out;
 		}
 	}
 
-	if (pos) {
-		callee->ref = 0;
-		list_add(&callee->list, &mtk_lpm_callees);
-	}
+	callee->ref = 0;
+	list_add(&callee->list, &mtk_lpm_callees);
+
+out:
 	spin_unlock(&mtk_lp_plat_call_locker);
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(mtk_lpm_callee_registry);
 
 int mtk_lpm_callee_unregistry(struct mtk_lpm_callee *callee)
 {
-	int bRet = 0;
+	int ret = -ENOENT;
 	struct mtk_lpm_callee *pos;
 
 	if (!callee)
@@ -48,17 +48,19 @@ int mtk_lpm_callee_unregistry(struct mtk_lpm_callee *callee)
 
 	spin_lock(&mtk_lp_plat_call_locker);
 	list_for_each_entry(pos, &mtk_lpm_callees, list) {
-		if (pos && (pos->uid == callee->uid)) {
-			if (!pos->ref)
-				list_del(&pos->list);
+		if (pos == callee) {
+			if (!pos->ref) {
+				list_del_init(&pos->list);
+				ret = 0;
+			}
 			else
-				bRet = -EPERM;
+				ret = -EBUSY;
 			break;
 		}
 	}
 	spin_unlock(&mtk_lp_plat_call_locker);
 
-	return bRet;
+	return ret;
 }
 EXPORT_SYMBOL(mtk_lpm_callee_unregistry);
 
@@ -72,7 +74,7 @@ int mtk_lpm_callee_get_impl(int uid, const struct mtk_lpm_callee **callee)
 	*callee = NULL;
 	spin_lock(&mtk_lp_plat_call_locker);
 	list_for_each_entry(pos, &mtk_lpm_callees, list) {
-		if (pos && pos->uid == uid) {
+		if (pos->uid == uid) {
 			pos->ref++;
 			*callee = pos;
 			break;
@@ -94,7 +96,12 @@ int mtk_lpm_callee_put_impl(struct mtk_lpm_callee const *callee)
 
 	spin_lock(&mtk_lp_plat_call_locker);
 	list_for_each_entry(pos, &mtk_lpm_callees, list) {
-		if (pos && (pos->uid == callee->uid)) {
+		if (pos == callee) {
+			if (!pos->ref) {
+				ret = -EINVAL;
+				break;
+			}
+
 			pos->ref--;
 			ret = 0;
 			break;

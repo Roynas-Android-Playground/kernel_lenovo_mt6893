@@ -77,6 +77,12 @@ int mtk_lpm_model_percpu_set(int cpu, struct mtk_lpm_module_reg *p)
 	int idx;
 
 	dev = cpuidle_get_device();
+	if (!dev) {
+		pr_info("[name:mtk_lpm][P] - cpuidle dev is null (%s:%d)\n",
+			__func__, __LINE__);
+		return -ENODEV;
+	}
+
 	drv = cpuidle_get_cpu_driver(dev);
 
 	if (!drv) {
@@ -145,7 +151,7 @@ int mtk_lpm_module_register_blockcall(int cpu, void *p)
 	switch (reg->type) {
 	case MTK_LPM_MODLE:
 		if (reg->data.info.name)
-			mtk_lpm_model_percpu_set(cpu, reg);
+			ret = mtk_lpm_model_percpu_set(cpu, reg);
 		break;
 	case MTK_LPM_SYS_ISSUER:
 		mtk_lpm_system.issuer =
@@ -223,8 +229,9 @@ int mtk_lp_cpuidle_prepare(struct cpuidle_driver *drv, int index)
 	const int cpuid = smp_processor_id();
 	int ret = 0;
 
-	if (index < 0)
-		return -1;
+	if (!drv || index < 0 || index >= drv->state_count ||
+	    index >= CPUIDLE_STATE_MAX)
+		return -EINVAL;
 
 	lpmmods = this_cpu_ptr(&mtk_lpm_mods);
 
@@ -244,7 +251,7 @@ int mtk_lp_cpuidle_prepare(struct cpuidle_driver *drv, int index)
 		prompt = lpm->op.prompt(cpuid, nb_data.issuer);
 
 
-	if (!unlikely(flags & MTK_LP_REQ_NOBROADCAST)) {
+	if (!unlikely(model_flags & MTK_LP_REQ_NOBROADCAST)) {
 		prompt = mtk_lp_notify_var(MTK_LPM_NB_AFTER_PROMPT, prompt);
 		mtk_lp_pm_notify(prompt, &nb_data);
 	}
@@ -268,7 +275,8 @@ void mtk_lp_cpuidle_resume(struct cpuidle_driver *drv, int index)
 	unsigned long flags;
 	const int cpuid = smp_processor_id();
 
-	if (index < 0)
+	if (!drv || index < 0 || index >= drv->state_count ||
+	    index >= CPUIDLE_STATE_MAX)
 		return;
 
 	lpmmods = this_cpu_ptr(&mtk_lpm_mods);
@@ -290,7 +298,7 @@ void mtk_lp_cpuidle_resume(struct cpuidle_driver *drv, int index)
 
 	spin_lock_irqsave(&mtk_lp_mod_locker, flags);
 
-	if (!unlikely(flags & MTK_LP_REQ_NOBROADCAST))
+	if (!unlikely(model_flags & MTK_LP_REQ_NOBROADCAST))
 		mtk_lp_pm_notify(MTK_LPM_NB_BEFORE_REFLECT, &nb_data);
 
 	if (lpm && lpm->op.reflect)
@@ -347,7 +355,7 @@ int mtk_lpm_suspend_registry(const char *name, struct mtk_lpm_model *suspend)
 
 	if (mtk_lpm_system.suspend.flag &
 			MTK_LP_REQ_NOSYSCORE_CB) {
-		mtk_lp_model_register(name, suspend);
+		return mtk_lp_model_register(name, suspend);
 	} else {
 		spin_lock_irqsave(&mtk_lp_mod_locker, flags);
 		memcpy(&mtk_lpm_system.suspend, suspend,

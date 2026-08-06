@@ -66,25 +66,11 @@ void mtk_lpm_irqremain_list_release(void)
 	struct mtk_lpm_irqremain_node *cur;
 	struct mtk_lpm_irqremain_node *next;
 
-	if (list_empty(&mtk_irqremain))
-		return;
-
 	mtk_lpm_system_lock(flag);
-	cur = list_first_entry(&mtk_irqremain,
-				struct mtk_lpm_irqremain_node,
-				list);
-	do {
-		if (list_is_last(&cur->list, &mtk_irqremain))
-			next = NULL;
-		else
-			next = list_next_entry(cur, list);
-
+	list_for_each_entry_safe(cur, next, &mtk_irqremain, list) {
 		list_del(&cur->list);
 		kfree(cur);
-		cur = next;
-	} while (cur);
-
-	INIT_LIST_HEAD(&mtk_irqremain);
+	}
 	mtk_lpm_system_unlock(flag);
 }
 EXPORT_SYMBOL(mtk_lpm_irqremain_list_release);
@@ -99,35 +85,37 @@ int mtk_lpm_irqremain_get(struct mtk_lpm_irqremain **irq)
 	if (!irq)
 		return -EINVAL;
 
-	if (list_empty(&mtk_irqremain))
-		return -EPERM;
+	*irq = NULL;
 
 	mtk_lpm_system_lock(flag);
+
+	if (list_empty(&mtk_irqremain)) {
+		mtk_lpm_system_unlock(flag);
+		return -ENOENT;
+	}
 
 	FOR_EACH_IRQ_REMAIN(irqnode)
 		count++;
 
-	*irq = NULL;
-
-	tar = kcalloc(1, sizeof(**irq), GFP_KERNEL);
+	tar = kcalloc(1, sizeof(**irq), GFP_ATOMIC);
 
 	if (!tar)
 		goto mtk_lpm_tar_fail;
 
 	tar->irqs = kcalloc(count,
-				sizeof(*tar->irqs), GFP_KERNEL);
+				sizeof(*tar->irqs), GFP_ATOMIC);
 
 	if (!tar->irqs)
 		goto mtk_lpm_irq_fail;
 
 	tar->wakeup_src_cat = kcalloc(count,
-		sizeof(*tar->wakeup_src_cat), GFP_KERNEL);
+		sizeof(*tar->wakeup_src_cat), GFP_ATOMIC);
 
 	if (!tar->wakeup_src_cat)
 		goto mtk_lpm_wakeup_src_cat_fail;
 
 	tar->wakeup_src = kcalloc(count,
-				sizeof(*tar->irqs), GFP_KERNEL);
+				sizeof(*tar->wakeup_src), GFP_ATOMIC);
 
 	if (!tar->wakeup_src)
 		goto mtk_lpm_irqremain_release;
@@ -169,6 +157,7 @@ void mtk_lpm_irqremain_put(struct mtk_lpm_irqremain *irqs)
 {
 	if (irqs) {
 		kfree(irqs->irqs);
+		kfree(irqs->wakeup_src_cat);
 		kfree(irqs->wakeup_src);
 		kfree(irqs);
 	}
@@ -220,22 +209,27 @@ int __init mtk_lpm_irqremain_parsing(struct device_node *parent)
 				break;
 
 			irqnum = of_irq_get(tar_np, irqidx);
+			if (irqnum < 0) {
+				pr_info("[name:mtk_lpm][P] - invalid irq, error=%d (%s:%d)\n",
+					irqnum, __func__, __LINE__);
+				continue;
+			}
+
 			irqtype = irq_get_trigger_type(irqnum);
 
 			if (!(irqtype & IRQ_TYPE_EDGE_BOTH))
 				pr_info("[name:mtk_lpm][P] - %pOF irq(%d) type = 0x%x ?\n",
 						tar_np, irqidx, irqtype);
+
 			if (irq_do) {
 				irq_set_irq_type(irqnum, irqtype);
 				pr_info("[name:mtk_lpm][P] - %pOF set irq(%d) as type = 0x%x\n",
 						tar_np, irqidx, irqtype);
 			}
 
-			if (irqnum >= 0) {
-				irqnode = kcalloc(1, sizeof(*irqnode),
-						  GFP_KERNEL);
+			irqnode = kcalloc(1, sizeof(*irqnode), GFP_KERNEL);
 
-				if (irqnode) {
+			if (irqnode) {
 					irqnode->irq =
 							irqnum;
 					irqnode->wakeup_src_cat =
@@ -252,10 +246,7 @@ int __init mtk_lpm_irqremain_parsing(struct device_node *parent)
 						__func__, __LINE__);
 
 					remain_count++;
-				}
-			} else
-				pr_info("[name:mtk_lpm][P] - invalid irq, erro=%d (%s:%d)\n",
-						irqnum, __func__, __LINE__);
+			}
 
 		} while (1);
 
