@@ -107,7 +107,9 @@ static int fpsgo_update_tracemark(void)
 
 static noinline int tracing_mark_write(const char *buf)
 {
+#ifndef CONFIG_DISABLE_TRACE_PRINTK
 	trace_printk(buf);
+#endif
 	return 0;
 }
 
