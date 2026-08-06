@@ -827,7 +827,6 @@ static int system_opp_count(void)
 			sge = sg->sge;
 		} else {
 			rcu_read_unlock();
-			pr_info("sched: %s no sd\n", __func__);
 			return -1;
 		}
 		count += sge->nr_cap_states;
