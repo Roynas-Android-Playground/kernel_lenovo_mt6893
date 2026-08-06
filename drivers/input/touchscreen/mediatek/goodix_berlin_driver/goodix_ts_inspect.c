@@ -709,7 +709,7 @@ exit_free:
     return ret;
 }
 
-static int goodix_tptest_prepare(struct goodix_ts_test *ts_test)
+static noinline int goodix_tptest_prepare(struct goodix_ts_test *ts_test)
 {
     int ret;
 	struct goodix_ic_config *cfg = &ts_test->test_config;
@@ -744,7 +744,7 @@ static int goodix_tptest_prepare(struct goodix_ts_test *ts_test)
     return 0;
 }
 
-static void goodix_tptest_finish(struct goodix_ts_test *ts_test)
+static noinline void goodix_tptest_finish(struct goodix_ts_test *ts_test)
 {
 	ts_info("TP test finish IN");
     /* reset chip */
@@ -1304,7 +1304,7 @@ static int send_test_cmd(struct goodix_ts_test *ts_test,
 #define INSPECT_PARAM_CMD				0xAA
 #define SHORT_TEST_FINISH_FLAG  		0x88
 #define SHORT_TEST_THRESHOLD_REG		0x20402
-static void goodix_shortcircut_test(struct goodix_ts_test *ts_test)
+static noinline void goodix_shortcircut_test(struct goodix_ts_test *ts_test)
 {
     int ret = 0;
     int retry;
@@ -1389,7 +1389,7 @@ static void goodix_shortcircut_test(struct goodix_ts_test *ts_test)
 
 #define GOODIX_CMD_RAWDATA	2
 #define GOODIX_TOUCH_EVENT	0x80
-static int goodix_cap_test_prepare(struct goodix_ts_test *ts_test)
+static noinline int goodix_cap_test_prepare(struct goodix_ts_test *ts_test)
 {
     int ret;
     struct goodix_ts_cmd temp_cmd;
@@ -1420,7 +1420,7 @@ static int goodix_cap_test_prepare(struct goodix_ts_test *ts_test)
     return ret;
 }
 
-static int goodix_cap_test_finish(struct goodix_ts_test *ts_test)
+static noinline int goodix_cap_test_finish(struct goodix_ts_test *ts_test)
 {
 	ts_info("cap_test finished");
     /* switch coor mode */
@@ -1428,7 +1428,7 @@ static int goodix_cap_test_finish(struct goodix_ts_test *ts_test)
 	return 0;
 }
 
-static int goodix_cache_rawdata(struct goodix_ts_test *ts_test)
+static noinline int goodix_cache_rawdata(struct goodix_ts_test *ts_test)
 {
 	int ret;
 	int i;
@@ -1499,7 +1499,7 @@ static int goodix_cache_rawdata(struct goodix_ts_test *ts_test)
 	return ret;
 }
 
-static void goodix_cache_deltadata(struct goodix_ts_test *ts_test)
+static noinline void goodix_cache_deltadata(struct goodix_ts_test *ts_test)
 {
 	u32 data_size;
 	int tx = ts_test->test_params.drv_num;
@@ -1546,7 +1546,7 @@ static void goodix_cache_deltadata(struct goodix_ts_test *ts_test)
 	}
 }
 
-static int goodix_cache_self_rawdata(struct goodix_ts_test *ts_test)
+static noinline int goodix_cache_self_rawdata(struct goodix_ts_test *ts_test)
 {
 	int ret;
 	u32 sen_num = ts_test->test_params.sen_num;
@@ -1590,7 +1590,7 @@ static int goodix_cache_self_rawdata(struct goodix_ts_test *ts_test)
 	return ret;
 }
 
-static int goodix_cache_noisedata(struct goodix_ts_test *ts_test)
+static noinline int goodix_cache_noisedata(struct goodix_ts_test *ts_test)
 {
 	int ret;
 	int i;
@@ -1674,7 +1674,7 @@ static int goodix_cache_noisedata(struct goodix_ts_test *ts_test)
 	return ret;
 }
 
-static int goodix_cache_self_noisedata(struct goodix_ts_test *ts_test)
+static noinline int goodix_cache_self_noisedata(struct goodix_ts_test *ts_test)
 {
 	int ret;
 	int i;
@@ -1723,7 +1723,7 @@ static int goodix_cache_self_noisedata(struct goodix_ts_test *ts_test)
 	return ret;	
 }
 
-static int goodix_analysis_rawdata(struct goodix_ts_test *ts_test)
+static noinline int goodix_analysis_rawdata(struct goodix_ts_test *ts_test)
 {
 	int i;
 	int j;
@@ -1760,7 +1760,7 @@ static int goodix_analysis_rawdata(struct goodix_ts_test *ts_test)
 	return 0;
 }
 
-static int goodix_analysis_deltadata(struct goodix_ts_test *ts_test)
+static noinline int goodix_analysis_deltadata(struct goodix_ts_test *ts_test)
 {
 	int i;
 	int j;
@@ -1781,7 +1781,7 @@ static int goodix_analysis_deltadata(struct goodix_ts_test *ts_test)
 	return ret;
 }
 
-static int goodix_analysis_self_rawdata(struct goodix_ts_test *ts_test)
+static noinline int goodix_analysis_self_rawdata(struct goodix_ts_test *ts_test)
 {
 	int i;
 	s16 val;
@@ -1801,7 +1801,7 @@ static int goodix_analysis_self_rawdata(struct goodix_ts_test *ts_test)
 	return 0;	
 }
 
-static int goodix_analysis_noisedata(struct goodix_ts_test *ts_test)
+static noinline int goodix_analysis_noisedata(struct goodix_ts_test *ts_test)
 {
 	int cnt;
 	int i;
@@ -1832,7 +1832,7 @@ static int goodix_analysis_noisedata(struct goodix_ts_test *ts_test)
 	return 0;
 }
 
-static int goodix_analysis_self_noisedata(struct goodix_ts_test *ts_test)
+static noinline int goodix_analysis_self_noisedata(struct goodix_ts_test *ts_test)
 {
 	int i;
 	s16 val;
@@ -1850,7 +1850,7 @@ static int goodix_analysis_self_noisedata(struct goodix_ts_test *ts_test)
 	return 0;		
 }
 
-static void goodix_capacitance_test(struct goodix_ts_test *ts_test)
+static noinline void goodix_capacitance_test(struct goodix_ts_test *ts_test)
 {
 	int ret;
 
@@ -2689,7 +2689,7 @@ save_end:
 }
 #endif // SAVE_IN_CSV
 
-static void goodix_put_test_result(struct goodix_ts_test *ts_test,
+static noinline void goodix_put_test_result(struct goodix_ts_test *ts_test,
 		struct ts_rawdata_info *info)
 {
 	int i;
