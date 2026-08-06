@@ -241,9 +241,22 @@ int mt6885_suspend_s2idle_prompt(int cpu,
 					const struct mtk_lpm_issuer *issuer)
 {
 	int ret = 0;
+	unsigned int weight;
+	unsigned int online;
 
 	cpumask_set_cpu(cpu, &s2idle_cpumask);
-	if (cpumask_weight(&s2idle_cpumask) == num_online_cpus()) {
+	weight = cpumask_weight(&s2idle_cpumask);
+	online = num_online_cpus();
+
+	printk_deferred(
+		"[name:spm&][s2idle_dbg] prompt: cpu=%d checked_in=%*pbl weight=%u online=%u\n",
+		cpu, cpumask_pr_args(&s2idle_cpumask), weight, online);
+
+	if (weight == online) {
+
+		printk_deferred(
+			"[name:spm&][s2idle_dbg] prompt: cpu=%d is LAST, entering syscore_suspend\n",
+			cpu);
 
 #ifdef CONFIG_PM_SLEEP
 		/* Notice
@@ -259,11 +272,20 @@ int mt6885_suspend_s2idle_prompt(int cpu,
 			ret = syscore_suspend();
 		});
 #endif
+
+		printk_deferred(
+			"[name:spm&][s2idle_dbg] prompt: cpu=%d syscore_suspend ret=%d\n",
+			cpu, ret);
+
 		if (ret < 0)
 			mt6885_model_suspend.flag |= MTK_LP_PREPARE_FAIL;
 
 		ret = __mt6885_suspend_prompt(MTK_LPM_SUSPEND_S2IDLE,
 					      cpu, issuer);
+
+		printk_deferred(
+			"[name:spm&][s2idle_dbg] prompt: cpu=%d __mt6885_suspend_prompt ret=%d\n",
+			cpu, ret);
 	}
 	return ret;
 }
@@ -282,7 +304,17 @@ int mt6885_suspend_s2idle_prepare_enter(int prompt, int cpu,
 void mt6885_suspend_s2idle_reflect(int cpu,
 					const struct mtk_lpm_issuer *issuer)
 {
-	if (cpumask_weight(&s2idle_cpumask) == num_online_cpus()) {
+	unsigned int weight = cpumask_weight(&s2idle_cpumask);
+	unsigned int online = num_online_cpus();
+
+	printk_deferred(
+		"[name:spm&][s2idle_dbg] reflect: cpu=%d checked_in=%*pbl weight=%u online=%u\n",
+		cpu, cpumask_pr_args(&s2idle_cpumask), weight, online);
+
+	if (weight == online) {
+		printk_deferred(
+			"[name:spm&][s2idle_dbg] reflect: cpu=%d is LEADER, running resume\n",
+			cpu);
 		__mt6885_suspend_reflect(MTK_LPM_SUSPEND_S2IDLE,
 					 cpu, issuer);
 #ifdef CONFIG_PM_SLEEP
