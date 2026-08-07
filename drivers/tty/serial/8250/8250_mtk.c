@@ -75,6 +75,7 @@
 #define MTK_UART_SEND_SLEEP_REQ	0x1	/* Request uart to sleep */
 #define MTK_UART_SLEEP_ACK_IDLE	0x1	/* uart in idle state */
 #define MTK_UART_WAIT_ACK_TIMES	50
+#define MTK_UART_WAIT_IDLE_TIMES	2000	/* ~20ms at 10us/iter */
 
 #define MTK_UART_ESCAPE_CHAR	0x77	/* Escape char added under sw fc */
 
@@ -453,6 +454,7 @@ static int __maybe_unused mtk8250_runtime_suspend(struct device *dev)
 {
 	struct mtk8250_data *data = dev_get_drvdata(dev);
 	struct uart_8250_port *up;
+	int i;
 
 	if (data == NULL)
 		return 0;
@@ -460,9 +462,18 @@ static int __maybe_unused mtk8250_runtime_suspend(struct device *dev)
 	up = serial8250_get_port(data->line);
 	if (up->port.dev == NULL)
 		return 0;
-	/*wait until UART in idle status*/
-	while
-		(serial_in(up, MTK_UART_DEBUG0));
+
+	/*
+	 * Wait until UART in idle status. Bounded: a stuck busy bit
+	 * (HW glitch, stalled TX FIFO/DMA) must not hang the whole
+	 * suspend/runtime-PM path forever.
+	 */
+	for (i = 0; i < MTK_UART_WAIT_IDLE_TIMES &&
+			serial_in(up, MTK_UART_DEBUG0); i++)
+		udelay(10);
+	if (i >= MTK_UART_WAIT_IDLE_TIMES)
+		pr_info_ratelimited("%s: UART%d not idle after %dus\n",
+			__func__, data->line, MTK_UART_WAIT_IDLE_TIMES * 10);
 
 	if (data->clk_count == 0U)
 		pr_debug("%s clock count is 0\n", __func__);
