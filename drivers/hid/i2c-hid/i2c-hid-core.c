@@ -1514,6 +1514,25 @@ static int i2c_hid_resume(struct device *dev)
 	int wake_status;
 
 	printk(KERN_DEBUG "=== %s ===!\n",__func__);
+
+	/*
+	 * Every device that reaches this driver on this tree requires
+	 * mcu_en_gpio/mcu_rst_gpio/mcu_hall_int_gpio to even probe (see
+	 * i2c_hid_parse_dt_gpio(), returns -ENODEV without them) - i.e.
+	 * this driver only ever binds to the Lenovo pogo-dock keyboard/
+	 * trackpad accessory, never a generic i2c-hid device. It's
+	 * hot-pluggable; kb_connect_status reflects whether it was last
+	 * seen attached via its own HID connect-status report (set with
+	 * no per-device vendor/product restriction, so it's valid for
+	 * either sub-device of the accessory). Skip the bus reset/wake
+	 * handshake when not attached instead of unconditionally poking
+	 * an MCU that isn't on the bus - that always failed with
+	 * -EREMOTEIO (-121) and wasted a resume cycle on every
+	 * suspend/resume when undocked.
+	 */
+	if (!kb_connect_status)
+		return 0;
+
 	if (!device_may_wakeup(&client->dev)) {
 		//ret = regulator_enable(ihid->pdata.supply);
 		//if (ret < 0)
