@@ -345,7 +345,7 @@ mtk8250_set_termios(struct uart_port *port, struct ktermios *termios,
 {
 	struct uart_8250_port *up = up_to_u8250p(port);
 	unsigned long flags;
-	unsigned int baud, quot;
+	unsigned int baud, quot, highs;
 	int mode;
 
 	/*
@@ -381,25 +381,36 @@ mtk8250_set_termios(struct uart_port *port, struct ktermios *termios,
 				  port->uartclk);
 
 	if (baud <= 115200) {
-		serial_port_out(port, MTK_UART_HIGHS, 0x0);
+		highs = 0x0;
 		quot = uart_get_divisor(port, baud);
 	} else if (baud <= 576000) {
-		serial_port_out(port, MTK_UART_HIGHS, 0x2);
+		highs = 0x2;
 
 		/* Set to next lower baudrate supported */
 		if ((baud == 500000) || (baud == 576000))
 			baud = 460800;
 		quot = DIV_ROUND_CLOSEST(port->uartclk, 4 * baud);
 	} else {
-		serial_port_out(port, MTK_UART_HIGHS, 0x3);
+		highs = 0x3;
 		quot = DIV_ROUND_UP(port->uartclk, 256 * baud);
 	}
 
 	/*
 	 * Ok, we're now changing the port state.  Do it with
 	 * interrupts disabled.
+	 *
+	 * MTK_UART_HIGHS must be written under port->lock, atomically with
+	 * the quot/sample-count/sample-point writes below: it directly
+	 * changes the transmitter's bit-timing mode, and console writes
+	 * (serial8250_console_write()) also take port->lock around their
+	 * FIFO feed. Writing it outside the lock let a console write in
+	 * flight race a concurrent set_termios() and get its still-queued
+	 * bytes clocked out under a suddenly-changed bit-timing mode,
+	 * corrupting the byte stream on the wire.
 	 */
 	spin_lock_irqsave(&port->lock, flags);
+
+	serial_port_out(port, MTK_UART_HIGHS, highs);
 
 	/* set DLAB we have cval saved in up->lcr from the call to the core */
 	serial_port_out(port, UART_LCR, up->lcr | UART_LCR_DLAB);
