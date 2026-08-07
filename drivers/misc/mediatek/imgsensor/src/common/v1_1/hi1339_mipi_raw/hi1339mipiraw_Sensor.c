@@ -209,7 +209,7 @@ static struct SET_PD_BLOCK_INFO_T imgsensor_pd_info = {
 	.i4BlockNumY = 96,
 };
 
-static kal_uint16 read_cmos_sensor(kal_uint16 addr)
+static noinline kal_uint16 read_cmos_sensor(kal_uint16 addr)
 {
     kal_uint16 get_byte = 0;
     char pusendcmd[2] = {(char)(addr >> 8), (char)(addr & 0xFF) };
@@ -217,14 +217,14 @@ static kal_uint16 read_cmos_sensor(kal_uint16 addr)
     return get_byte;
 }
 
-static void write_cmos_sensor(kal_uint16 addr, kal_uint8 para)
+static noinline void write_cmos_sensor(kal_uint16 addr, kal_uint8 para)
 {
     char pusendcmd[3] = {(char)(addr >> 8), (char)(addr & 0xFF),
             (char)(para & 0xFF)};
     iWriteRegI2C(pusendcmd, 3, imgsensor.i2c_write_id);
 }
 
-static void write_cmos_sensor_16(kal_uint16 addr, kal_uint16 data)
+static noinline void write_cmos_sensor_16(kal_uint16 addr, kal_uint16 data)
 {
     char pusendcmd[4] = {(char)(addr >> 8), (char)(addr & 0xFF), (char)(data >> 8), (char)(data & 0xFF)};
     iWriteRegI2C(pusendcmd, 4, imgsensor.i2c_write_id);

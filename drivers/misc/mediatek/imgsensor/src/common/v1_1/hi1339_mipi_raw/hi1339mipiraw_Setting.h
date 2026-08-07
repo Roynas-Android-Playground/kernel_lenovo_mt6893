@@ -6,7 +6,7 @@
 #define _HI1339MIPIRAW_SETTING_H
 #include "hi1339mipiraw_Sensor.h"
 
-static void write_cmos_sensor_16(kal_uint16 addr, kal_uint16 data);
+static noinline void write_cmos_sensor_16(kal_uint16 addr, kal_uint16 data);
 
 static void load_init_setting(void)
 {
