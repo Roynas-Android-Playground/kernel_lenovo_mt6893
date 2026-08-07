@@ -63,6 +63,7 @@ obj-$(CONFIG_MEMORY_STATE_TIME)	+= memory_state_time.o
 obj-$(CONFIG_MEDIATEK_SOLUTION) += mediatek/
 obj-$(CONFIG_OCP96011_I2C) += ocp96011-i2c.o
 obj-$(CONFIG_BOX_ID) += board_id.o
+obj-$(CONFIG_ALWAYS_ON_WAKELOCK) += always_on_wakelock.o
 
 lkdtm-$(CONFIG_LKDTM)		+= lkdtm_core.o
 lkdtm-$(CONFIG_LKDTM)		+= lkdtm_bugs.o
