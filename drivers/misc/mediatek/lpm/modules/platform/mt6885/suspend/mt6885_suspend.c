@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/cpu_pm.h>
 #include <linux/cpumask.h>
+#include <linux/spinlock.h>
 #include <linux/syscore_ops.h>
 #include <linux/suspend.h>
 #include <linux/timekeeping.h>
@@ -34,6 +35,7 @@ struct md_sleep_status before_md_sleep_status;
 struct md_sleep_status after_md_sleep_status;
 
 struct cpumask s2idle_cpumask;
+static DEFINE_SPINLOCK(s2idle_cpumask_lock);
 struct mtk_lpm_model mt6885_model_suspend;
 
 void __attribute__((weak)) subsys_if_on(void)
@@ -243,16 +245,26 @@ int mt6885_suspend_s2idle_prompt(int cpu,
 	int ret = 0;
 	unsigned int weight;
 	unsigned int online;
+	bool is_last;
+	unsigned long flags;
 
+	/*
+	 * cpumask_set_cpu() + cpumask_weight() must be observed as a single
+	 * atomic step per caller, else two CPUs whose set/read interleave
+	 * can both see weight == online and both enter syscore_suspend().
+	 */
+	spin_lock_irqsave(&s2idle_cpumask_lock, flags);
 	cpumask_set_cpu(cpu, &s2idle_cpumask);
 	weight = cpumask_weight(&s2idle_cpumask);
 	online = num_online_cpus();
+	is_last = (weight == online);
+	spin_unlock_irqrestore(&s2idle_cpumask_lock, flags);
 
 	printk_deferred(
 		"[name:spm&][s2idle_dbg] prompt: cpu=%d checked_in=%*pbl weight=%u online=%u\n",
 		cpu, cpumask_pr_args(&s2idle_cpumask), weight, online);
 
-	if (weight == online) {
+	if (is_last) {
 
 		printk_deferred(
 			"[name:spm&][s2idle_dbg] prompt: cpu=%d is LAST, entering syscore_suspend\n",
@@ -304,14 +316,30 @@ int mt6885_suspend_s2idle_prepare_enter(int prompt, int cpu,
 void mt6885_suspend_s2idle_reflect(int cpu,
 					const struct mtk_lpm_issuer *issuer)
 {
-	unsigned int weight = cpumask_weight(&s2idle_cpumask);
-	unsigned int online = num_online_cpus();
+	unsigned int weight;
+	unsigned int online;
+	bool is_leader;
+	unsigned long flags;
+
+	/*
+	 * The mask stays fully populated until each waking CPU clears its
+	 * own bit, so the "am I the leader" read and the self-clear must
+	 * happen as one atomic step. Otherwise every CPU that calls this
+	 * before the true leader gets around to clearing its bit will also
+	 * observe weight == online and also run the leader/resume path.
+	 */
+	spin_lock_irqsave(&s2idle_cpumask_lock, flags);
+	weight = cpumask_weight(&s2idle_cpumask);
+	online = num_online_cpus();
+	is_leader = (weight == online);
+	cpumask_clear_cpu(cpu, &s2idle_cpumask);
+	spin_unlock_irqrestore(&s2idle_cpumask_lock, flags);
 
 	printk_deferred(
 		"[name:spm&][s2idle_dbg] reflect: cpu=%d checked_in=%*pbl weight=%u online=%u\n",
 		cpu, cpumask_pr_args(&s2idle_cpumask), weight, online);
 
-	if (weight == online) {
+	if (is_leader) {
 		printk_deferred(
 			"[name:spm&][s2idle_dbg] reflect: cpu=%d is LEADER, running resume\n",
 			cpu);
@@ -333,7 +361,6 @@ void mt6885_suspend_s2idle_reflect(int cpu,
 
 #endif
 	}
-	cpumask_clear_cpu(cpu, &s2idle_cpumask);
 }
 
 #define MT6885_SUSPEND_OP_INIT(_prompt, _enter, _resume, _reflect) ({\
