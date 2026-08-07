@@ -556,6 +556,16 @@ char *mtk8250_uart_dump(void)
 		return "";
 	return uart_write_statbuf;
 }
+
+static ssize_t uart_dump_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	char *dump = mtk8250_uart_dump();
+
+	pr_info("mtk8250 uart_dump: %s\n", dump);
+	return scnprintf(buf, PAGE_SIZE, "%s\n", dump);
+}
+static DEVICE_ATTR_RO(uart_dump);
 #endif
 
 #ifndef CONFIG_FPGA_EARLY_PORTING
@@ -679,6 +689,11 @@ static int mtk8250_probe(struct platform_device *pdev)
 	if (data->line < 0)
 		return data->line;
 
+#ifdef CONFIG_CONSOLE_LOCK_DURATION_DETECT
+	if (device_create_file(&pdev->dev, &dev_attr_uart_dump))
+		dev_warn(&pdev->dev, "failed to create uart_dump sysfs entry\n");
+#endif
+
 	return 0;
 }
 
@@ -687,6 +702,10 @@ static int mtk8250_remove(struct platform_device *pdev)
 	struct mtk8250_data *data = platform_get_drvdata(pdev);
 	if (data == NULL)
 		return 0;
+
+#ifdef CONFIG_CONSOLE_LOCK_DURATION_DETECT
+	device_remove_file(&pdev->dev, &dev_attr_uart_dump);
+#endif
 
 	pm_runtime_get_sync(&pdev->dev);
 
