@@ -1532,6 +1532,9 @@ mtk_idle_power(int cpu_idx, int idle_state, int cpu, void *argu, int sd_level)
 		return 0;
 
 	_sge = cpu_core_energy(cpu);
+	/* [FIXME] racing with hotplug */
+	if (!_sge)
+		return 0;
 	volt =  _sge->cap_states[cap_idx].volt;
 	share_buck_volt(eenv, cpu_idx, cid, &co_buck);
 
@@ -1545,6 +1548,9 @@ mtk_idle_power(int cpu_idx, int idle_state, int cpu, void *argu, int sd_level)
 		struct upower_tbl_row *cpu_pwr_tbl, *clu_pwr_tbl;
 		sge_core = cpu_core_energy(cpu);
 		sge_clus = cpu_cluster_energy(cpu);
+		/* [FIXME] racing with hotplug */
+		if (!sge_core || !sge_clus)
+			return 0;
 
 		cpu_pwr_tbl = &sge_core->cap_states[cap_idx];
 		clu_pwr_tbl = &sge_clus->cap_states[cap_idx];
@@ -1570,6 +1576,9 @@ mtk_idle_power(int cpu_idx, int idle_state, int cpu, void *argu, int sd_level)
 		else
 			_sge = cpu_cluster_energy(cpu); /* for cluster */
 
+		/* [FIXME] racing with hotplug */
+		if (!_sge)
+			return 0;
 		pwr_tbl =  &_sge->cap_states[cap_idx];
 		lkg_pwr = pwr_tbl->lkg_pwr[_sge->lkg_idx];
 		energy_cost = lkg_pwr;
@@ -1638,9 +1647,15 @@ int mtk_busy_power(int cpu_idx, int cpu, void *argu, int sd_level)
 		/* fix HPS defeats: only one CPU in this cluster */
 
 		_sge = cpu_core_energy(cpu); /* for CPU */
+		/* [FIXME] racing with hotplug */
+		if (!_sge)
+			return 0;
 		energy_cost = calc_busy_power(_sge, cap_idx, co_buck.volt,
 							0);
 		_sge = cpu_cluster_energy(cpu); /* for cluster */
+		/* [FIXME] racing with hotplug */
+		if (!_sge)
+			return 0;
 		energy_cost += calc_busy_power(_sge, cap_idx, co_buck.volt,
 							1);
 	} else {
@@ -1649,6 +1664,9 @@ int mtk_busy_power(int cpu_idx, int cpu, void *argu, int sd_level)
 		else
 			_sge = cpu_cluster_energy(cpu); /* for cluster */
 
+		/* [FIXME] racing with hotplug */
+		if (!_sge)
+			return 0;
 		energy_cost = calc_busy_power(_sge, cap_idx, co_buck.volt,
 							sd_level);
 	}
@@ -1659,6 +1677,9 @@ int mtk_busy_power(int cpu_idx, int cpu, void *argu, int sd_level)
 		unsigned long volt;
 
 		_sge = cpu_core_energy(cpu); /* for CPU */
+		/* [FIXME] racing with hotplug */
+		if (!_sge)
+			return energy_cost;
 		volt =  _sge->cap_states[cap_idx].volt;
 
 		_sge = cci_energy();
