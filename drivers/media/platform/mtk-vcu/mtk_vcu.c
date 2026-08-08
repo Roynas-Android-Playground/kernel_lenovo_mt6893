@@ -133,7 +133,7 @@ inline unsigned int ipi_id_to_inst_id(int id)
 		return VCU_VENC;
 }
 
-#ifdef DEBUG
+#if 0
 #define vcu_dbg_log(fmt, arg...) do { \
 		if (vcu_ptr->enable_vcu_dbg_log) \
 			pr_info(fmt, ##arg); \
