@@ -36,7 +36,13 @@ struct md_sleep_status after_md_sleep_status;
 
 struct cpumask s2idle_cpumask;
 static DEFINE_SPINLOCK(s2idle_cpumask_lock);
+static bool s2idle_run_syscore;
+static bool s2idle_syscore_suspended;
 struct mtk_lpm_model mt6885_model_suspend;
+
+module_param_named(s2idle_run_syscore, s2idle_run_syscore, bool, 0644);
+MODULE_PARM_DESC(s2idle_run_syscore,
+	"Run global syscore callbacks from the last s2idle CPU");
 
 void __attribute__((weak)) subsys_if_on(void)
 {
@@ -260,34 +266,23 @@ int mt6885_suspend_s2idle_prompt(int cpu,
 	is_last = (weight == online);
 	spin_unlock_irqrestore(&s2idle_cpumask_lock, flags);
 
-	printk_deferred(
-		"[name:spm&][s2idle_dbg] prompt: cpu=%d checked_in=%*pbl weight=%u online=%u\n",
-		cpu, cpumask_pr_args(&s2idle_cpumask), weight, online);
-
 	if (is_last) {
-
-		printk_deferred(
-			"[name:spm&][s2idle_dbg] prompt: cpu=%d is LAST, entering syscore_suspend\n",
-			cpu);
-
 #ifdef CONFIG_PM_SLEEP
-		/* Notice
-		 * Fix the rcu_idle workaround later.
-		 * There are many rcu behaviors in syscore callback.
-		 * In s2idle framework, the rcu enter idle before cpu
-		 * enter idle state. So we need to using RCU_NONIDLE()
-		 * with syscore. But anyway in s2idle, when lastest cpu
-		 * enter idle state means there won't care r/w sync problem
-		 * and RCU_NOIDLE maybe the right solution.
-		 */
-		RCU_NONIDLE({
-			ret = syscore_suspend();
-		});
+		s2idle_syscore_suspended = false;
+		if (s2idle_run_syscore) {
+			/*
+			 * Keep the vendor behavior available for bisection only.
+			 * Generic s2idle leaves CPUs online and does not run the
+			 * global syscore list, whose contract requires one online
+			 * CPU.  Running it here can race a waking idle CPU.
+			 */
+			RCU_NONIDLE({
+				ret = syscore_suspend();
+			});
+			if (!ret)
+				s2idle_syscore_suspended = true;
+		}
 #endif
-
-		printk_deferred(
-			"[name:spm&][s2idle_dbg] prompt: cpu=%d syscore_suspend ret=%d\n",
-			cpu, ret);
 
 		if (ret < 0)
 			mt6885_model_suspend.flag |= MTK_LP_PREPARE_FAIL;
@@ -295,9 +290,6 @@ int mt6885_suspend_s2idle_prompt(int cpu,
 		ret = __mt6885_suspend_prompt(MTK_LPM_SUSPEND_S2IDLE,
 					      cpu, issuer);
 
-		printk_deferred(
-			"[name:spm&][s2idle_dbg] prompt: cpu=%d __mt6885_suspend_prompt ret=%d\n",
-			cpu, ret);
 	}
 	return ret;
 }
@@ -305,12 +297,10 @@ int mt6885_suspend_s2idle_prompt(int cpu,
 int mt6885_suspend_s2idle_prepare_enter(int prompt, int cpu,
 					const struct mtk_lpm_issuer *issuer)
 {
-	int ret = 0;
-
 	if (mt6885_model_suspend.flag & MTK_LP_PREPARE_FAIL)
-		ret = -1;
+		return -1;
 
-	return ret;
+	return 0;
 }
 
 void mt6885_suspend_s2idle_reflect(int cpu,
@@ -335,26 +325,14 @@ void mt6885_suspend_s2idle_reflect(int cpu,
 	cpumask_clear_cpu(cpu, &s2idle_cpumask);
 	spin_unlock_irqrestore(&s2idle_cpumask_lock, flags);
 
-	printk_deferred(
-		"[name:spm&][s2idle_dbg] reflect: cpu=%d checked_in=%*pbl weight=%u online=%u\n",
-		cpu, cpumask_pr_args(&s2idle_cpumask), weight, online);
-
 	if (is_leader) {
-		printk_deferred(
-			"[name:spm&][s2idle_dbg] reflect: cpu=%d is LEADER, running resume\n",
-			cpu);
 		__mt6885_suspend_reflect(MTK_LPM_SUSPEND_S2IDLE,
 					 cpu, issuer);
 #ifdef CONFIG_PM_SLEEP
-		/* Notice
-		 * Fix the rcu_idle/timekeeping workaround later.
-		 * There are many rcu behaviors in syscore callback.
-		 * In s2idle framework, the rcu enter idle before cpu
-		 * enter idle state. So we need to using RCU_NONIDLE()
-		 * with syscore.
-		 */
-		if (!(mt6885_model_suspend.flag & MTK_LP_PREPARE_FAIL))
+		if (s2idle_syscore_suspended) {
 			RCU_NONIDLE(syscore_resume());
+			s2idle_syscore_suspended = false;
+		}
 
 		if (mt6885_model_suspend.flag & MTK_LP_PREPARE_FAIL)
 			mt6885_model_suspend.flag &= (~MTK_LP_PREPARE_FAIL);

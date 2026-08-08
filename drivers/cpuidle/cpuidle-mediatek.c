@@ -26,6 +26,11 @@ typedef int (*mtk_pwr_fn)(int type,
 			  int index);
 
 static mtk_pwr_fn mtk_pwr_conservation;
+static bool s2idle_force_wfi;
+
+module_param_named(s2idle_force_wfi, s2idle_force_wfi, bool, 0644);
+MODULE_PARM_DESC(s2idle_force_wfi,
+	"Use WFI instead of the platform s2idle PSCI state");
 
 static __always_inline int __mtk_lp_enter(int index)
 {
@@ -36,11 +41,12 @@ static int mtk_idle_state_enter(struct cpuidle_device *dev,
 				struct cpuidle_driver *drv,
 				int idx)
 {
-	int ret;
+	int enter_idx, ret;
 
 	if (idx < 0 || idx >= CPUIDLE_STATE_MAX)
 		return -1;
 
+	enter_idx = idx;
 	if (mtk_pwr_conservation) {
 		ret = mtk_pwr_conservation(MTK_CPUIDLE_PREPARE, drv, idx);
 		/* abort s2idle when fail */
@@ -48,8 +54,11 @@ static int mtk_idle_state_enter(struct cpuidle_device *dev,
 			mtk_pwr_conservation(MTK_CPUIDLE_RESUME, drv, idx);
 			return ret;
 		}
-		idx = ret ? 0 : idx;
-		ret = __mtk_lp_enter(idx);
+		enter_idx = ret ? 0 : idx;
+		if (s2idle_force_wfi &&
+		    !strcmp(drv->states[idx].name, "s2idle"))
+			enter_idx = 0;
+		ret = __mtk_lp_enter(enter_idx);
 		mtk_pwr_conservation(MTK_CPUIDLE_RESUME, drv, idx);
 	} else
 		ret = CPU_PM_CPU_IDLE_ENTER(arm_cpuidle_suspend, 0);
