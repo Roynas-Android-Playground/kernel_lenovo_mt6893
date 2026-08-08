@@ -75,6 +75,32 @@ static DEFINE_PER_CPU(struct cpuhp_cpu_state, cpuhp_state) = {
 	.fail = CPUHP_INVALID,
 };
 
+/*
+ * CPUs in this mask must never cross the common CPU-up boundary.  Keeping
+ * the check in _cpu_up() covers initial SMP bring-up, sysfs, in-kernel
+ * cpu_up() callers and the suspend thaw path.
+ */
+static cpumask_t cpu_quarantine_mask __read_mostly;
+
+static int __init setup_cpu_quarantine(char *str)
+{
+	int ret;
+
+	ret = cpulist_parse(str, &cpu_quarantine_mask);
+	if (ret) {
+		pr_warn("Ignoring invalid cpu_quarantine=%s\n", str);
+		cpumask_clear(&cpu_quarantine_mask);
+		return 0;
+	}
+
+	/* The boot CPU cannot be taken through _cpu_up() and must remain usable. */
+	cpumask_clear_cpu(0, &cpu_quarantine_mask);
+	pr_warn("Quarantining CPUs from all CPU-up paths: %*pbl\n",
+		cpumask_pr_args(&cpu_quarantine_mask));
+	return 0;
+}
+early_param("cpu_quarantine", setup_cpu_quarantine);
+
 #if defined(CONFIG_LOCKDEP) && defined(CONFIG_SMP)
 static struct lockdep_map cpuhp_state_up_map =
 	STATIC_LOCKDEP_MAP_INIT("cpuhp_state-up", &cpuhp_state_up_map);
@@ -1090,6 +1116,11 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen, enum cpuhp_state target)
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	struct task_struct *idle;
 	int ret = 0;
+
+	if (cpumask_test_cpu(cpu, &cpu_quarantine_mask)) {
+		pr_warn_ratelimited("CPU%u is quarantined; refusing CPU-up\n", cpu);
+		return -EPERM;
+	}
 
 	cpus_write_lock();
 
