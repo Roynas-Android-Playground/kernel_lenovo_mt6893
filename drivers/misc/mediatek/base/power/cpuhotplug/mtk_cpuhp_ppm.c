@@ -28,12 +28,24 @@ static struct cpumask ppm_online_cpus;
 static struct cpumask ppm_allowed_cpus;
 static struct task_struct *ppm_kthread;
 static DEFINE_MUTEX(ppm_mutex);
+static DECLARE_WAIT_QUEUE_HEAD(ppm_wait_queue);
 
 #ifdef CONFIG_PM_SLEEP
 static struct wakeup_source *hps_ws;
 #endif
 
 #define HPS_RETRY	10
+
+static bool ppm_request_pending(void)
+{
+	struct cpumask requested;
+
+	mutex_lock(&ppm_mutex);
+	cpumask_and(&requested, &ppm_online_cpus, cpu_present_mask);
+	mutex_unlock(&ppm_mutex);
+
+	return !cpumask_equal(&requested, cpu_online_mask);
+}
 
 static int ppm_thread_fn(void *data)
 {
@@ -44,28 +56,17 @@ static int ppm_thread_fn(void *data)
 	struct cpumask ppm_cpus_req;
 
 	while (!kthread_should_stop()) {
-		/*
-		 * A CPU can be removed from cpu_present_mask after a failed late
-		 * bring-up.  PPM may still include it in the last policy request;
-		 * comparing that stale request directly with cpu_online_mask makes
-		 * this thread spin forever without any work it can perform.
-		 *
-		 * Arm the sleep before taking a coherent request snapshot so a
-		 * concurrent policy update cannot be lost between the comparison
-		 * and schedule().
-		 */
-		set_current_state(TASK_INTERRUPTIBLE);
+		rc = wait_event_interruptible(ppm_wait_queue,
+			kthread_should_stop() || ppm_request_pending());
+		if (kthread_should_stop())
+			break;
+		if (rc)
+			continue;
+
 		mutex_lock(&ppm_mutex);
 		cpumask_and(&ppm_cpus_req, &ppm_online_cpus,
 			    cpu_present_mask);
 		mutex_unlock(&ppm_mutex);
-
-		if (cpumask_equal(&ppm_cpus_req, cpu_online_mask)) {
-			schedule();
-			continue;
-		}
-
-		set_current_state(TASK_RUNNING);
 
 #ifdef CONFIG_PM_SLEEP
 		if (hps_ws)
@@ -181,7 +182,7 @@ static void ppm_limit_callback(struct ppm_client_req req)
 	ppm_apply_cpu_limit(&ppm_online_cpus);
 	mutex_unlock(&ppm_mutex);
 
-	wake_up_process(ppm_kthread);
+	wake_up_interruptible(&ppm_wait_queue);
 }
 
 
@@ -212,6 +213,7 @@ void ppm_notifier(void)
 		       PTR_ERR(ppm_kthread));
 		return;
 	}
+	wake_up_process(ppm_kthread);
 
 	/* register PPM callback */
 	mt_ppm_register_client(PPM_CLIENT_HOTPLUG, &ppm_limit_callback);
