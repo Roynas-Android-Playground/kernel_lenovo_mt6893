@@ -115,6 +115,7 @@ static int sc8551_mode_data[] = {
 #define VBAT_REG_STATUS_MASK		(1 << VBAT_REG_STATUS_SHIFT)
 #define IBAT_REG_STATUS_MASK		(1 << VBAT_REG_STATUS_SHIFT)
 
+#ifdef DEBUG
 #define sc_err(fmt, ...)								\
 do {											\
 	if (sc->mode == SC8551_ROLE_MASTER)						\
@@ -144,6 +145,14 @@ do {											\
 	else										\
 		printk(KERN_DEBUG "[sc8551-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
 } while(0);
+
+#else
+
+#define sc_err(fmt, ...)
+#define sc_info(fmt, ...)
+#define sc_dbg(fmt, ...)
+
+#endif
 
 #if 0
 	#undef sc_info
