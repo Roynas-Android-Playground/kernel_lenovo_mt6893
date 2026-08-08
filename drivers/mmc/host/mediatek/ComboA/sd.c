@@ -5622,29 +5622,60 @@ static int msdc_runtime_resume(struct device *dev)
 	struct msdc_host *host = dev_get_drvdata(dev);
 	struct arm_smccc_res smccc_res;
 	void __iomem *base = host->base;
+	int retry = 100000;
+	int ret;
 
 	pm_qos_update_request(&host->msdc_pm_qos_req, 0);
 	if (host->vcore_opp != -1)
 		pm_qos_update_request(host->req_vcore, host->vcore_opp);
 
-	if (host->new_rx_clk_ctl)
-		(void)clk_prepare_enable(host->new_rx_clk_ctl);
-	if (host->src_hclk_ctl)
-		(void)clk_prepare_enable(host->src_hclk_ctl);
-	if (host->pclk_ctl)
-		(void)clk_prepare_enable(host->pclk_ctl);
-	if (host->axi_clk_ctl)
-		(void)clk_prepare_enable(host->axi_clk_ctl);
-	if (host->ahb2axi_brg_clk_ctl)
-		(void)clk_prepare_enable(host->ahb2axi_brg_clk_ctl);
-	(void)clk_prepare_enable(host->clk_ctl);
-	if (host->aes_clk_ctl)
-		(void)clk_prepare_enable(host->aes_clk_ctl);
-	if (host->hclk_ctl)
-		(void)clk_prepare_enable(host->hclk_ctl);
+	if (host->new_rx_clk_ctl) {
+		ret = clk_prepare_enable(host->new_rx_clk_ctl);
+		if (ret)
+			goto out_qos;
+	}
+	if (host->src_hclk_ctl) {
+		ret = clk_prepare_enable(host->src_hclk_ctl);
+		if (ret)
+			goto disable_new_rx;
+	}
+	if (host->pclk_ctl) {
+		ret = clk_prepare_enable(host->pclk_ctl);
+		if (ret)
+			goto disable_src_hclk;
+	}
+	if (host->axi_clk_ctl) {
+		ret = clk_prepare_enable(host->axi_clk_ctl);
+		if (ret)
+			goto disable_pclk;
+	}
+	if (host->ahb2axi_brg_clk_ctl) {
+		ret = clk_prepare_enable(host->ahb2axi_brg_clk_ctl);
+		if (ret)
+			goto disable_axi;
+	}
+	ret = clk_prepare_enable(host->clk_ctl);
+	if (ret)
+		goto disable_ahb2axi;
+	if (host->aes_clk_ctl) {
+		ret = clk_prepare_enable(host->aes_clk_ctl);
+		if (ret)
+			goto disable_clk;
+	}
+	if (host->hclk_ctl) {
+		ret = clk_prepare_enable(host->hclk_ctl);
+		if (ret)
+			goto disable_aes;
+	}
 
-	while (!(MSDC_READ32(MSDC_CFG) & MSDC_CFG_CKSTB))
-		cpu_relax();
+	while (!(MSDC_READ32(MSDC_CFG) & MSDC_CFG_CKSTB)) {
+		if (!--retry) {
+			dev_err(dev, "clock failed to stabilize during resume\n");
+			ret = -ETIMEDOUT;
+			goto disable_hclk;
+		}
+		udelay(1);
+	}
 	/*
 	 * 1: MSDC_AES_CTL_INIT
 	 * 4: cap_id, no-meaning
@@ -5655,6 +5686,37 @@ static int msdc_runtime_resume(struct device *dev)
 			1, 4, 1, 0, 0, 0, 0, &smccc_res);
 
 	return 0;
+
+disable_hclk:
+	if (host->hclk_ctl)
+		clk_disable_unprepare(host->hclk_ctl);
+disable_aes:
+	if (host->aes_clk_ctl)
+		clk_disable_unprepare(host->aes_clk_ctl);
+disable_clk:
+	clk_disable_unprepare(host->clk_ctl);
+disable_ahb2axi:
+	if (host->ahb2axi_brg_clk_ctl)
+		clk_disable_unprepare(host->ahb2axi_brg_clk_ctl);
+disable_axi:
+	if (host->axi_clk_ctl)
+		clk_disable_unprepare(host->axi_clk_ctl);
+disable_pclk:
+	if (host->pclk_ctl)
+		clk_disable_unprepare(host->pclk_ctl);
+disable_src_hclk:
+	if (host->src_hclk_ctl)
+		clk_disable_unprepare(host->src_hclk_ctl);
+disable_new_rx:
+	if (host->new_rx_clk_ctl)
+		clk_disable_unprepare(host->new_rx_clk_ctl);
+out_qos:
+	pm_qos_update_request(&host->msdc_pm_qos_req,
+		PM_QOS_DEFAULT_VALUE);
+	if (host->vcore_opp != -1)
+		pm_qos_update_request(host->req_vcore,
+			PM_QOS_VCORE_OPP_DEFAULT_VALUE);
+	return ret;
 }
 
 static int msdc_suspend(struct device *dev)
