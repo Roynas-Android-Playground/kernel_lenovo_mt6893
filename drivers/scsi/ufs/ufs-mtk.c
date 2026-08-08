@@ -1398,7 +1398,12 @@ static int ufs_mtk_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 
 		ufs_mtk_vreg_lpm(hba, false);
 
-		ufs_mtk_pltfrm_resume(hba);
+		ret = ufs_mtk_pltfrm_resume(hba);
+		if (ret) {
+			dev_err(hba->dev, "%s: platform resume failed. ret = %d\n",
+				__func__, ret);
+			goto out;
+		}
 
 		/*
 		 * HCI power-on flow with link in hibern8
@@ -1441,8 +1446,12 @@ static int ufs_mtk_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 		 *       is in active state in MTK design.
 		 */
 		ret = ufshcd_uic_hibern8_exit(hba);
-		if (!ret)
-			ufshcd_set_link_active(hba);
+		if (ret) {
+			dev_err(hba->dev, "%s: hibern8 exit failed. ret = %d\n",
+				__func__, ret);
+			goto out;
+		}
+		ufshcd_set_link_active(hba);
 
 		/* Re-start hba */
 		ret = ufshcd_make_hba_operational(hba);
