@@ -811,6 +811,8 @@ static int mtk_spmi_ctrl_op_st(struct spmi_controller *ctrl,
 			u8 opc, u8 sid)
 {
 	struct pmif *arb = spmi_controller_get_drvdata(ctrl);
+	unsigned long long start_time_ns;
+	const unsigned long long timeout_ns = 10000 * 1000;
 	u32 rdata = 0x0;
 	u8 cmd = 0;
 
@@ -829,17 +831,23 @@ static int mtk_spmi_ctrl_op_st(struct spmi_controller *ctrl,
 	rdata = mtk_spmi_readl(arb, SPMI_OP_ST_CTRL);
 	pr_notice("[SPMIMST]:pmif_ctrl_op_st 0x%x\r\n", rdata);
 
+	start_time_ns = sched_clock();
 	do {
 		rdata = mtk_spmi_readl(arb, SPMI_OP_ST_STA);
-		pr_notice("[SPMIMST]:pmif_ctrl_op_st 0x%x\r\n", rdata);
 
 		if (((rdata >> 0x1) & SPMI_OP_ST_NACK) == SPMI_OP_ST_NACK) {
 			spmi_dump_spmimst_record_reg(arb);
-			break;
+			return -EIO;
 		}
-	} while ((rdata & SPMI_OP_ST_BUSY) == SPMI_OP_ST_BUSY);
+		if (!(rdata & SPMI_OP_ST_BUSY))
+			return 0;
+		cpu_relax();
+	} while (sched_clock() - start_time_ns < timeout_ns);
 
-	return 0;
+	dev_notice(&ctrl->dev, "[SPMIMST] command timeout, status=0x%x\n",
+		   rdata);
+	spmi_dump_spmimst_record_reg(arb);
+	return -ETIMEDOUT;
 }
 
 /* Non-data command */
