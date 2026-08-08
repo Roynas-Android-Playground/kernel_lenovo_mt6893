@@ -306,13 +306,8 @@ static void mtk_dbg_spm_fs_init(void)
 			, &mtk_dbg_spm_system_stats_fops, NULL);
 }
 
-static bool mtk_system_console_suspend;
-
 static void __exit mtk_dbg_common_fs_exit(void)
 {
-	/* restore suspend console */
-	console_suspend_enabled = mtk_system_console_suspend;
-
 	/* wakeup source deinit */
 	wakeup_source_unregister(mtk_suspend_lock);
 	/* remove syscore callback */
@@ -328,10 +323,6 @@ static int __init mtk_dbg_common_fs_init(void)
 		pr_info("%s %d: init wakeup source fail!", __func__, __LINE__);
 		return -1;
 	}
-	/* backup and disable suspend console (enable log print) */
-	mtk_system_console_suspend = console_suspend_enabled;
-	console_suspend_enabled = false;
-
 	mtk_dbg_suspend_fs_init();
 	mtk_dbg_spm_fs_init();
 	register_syscore_ops(&spm_dbg_syscore_ops);

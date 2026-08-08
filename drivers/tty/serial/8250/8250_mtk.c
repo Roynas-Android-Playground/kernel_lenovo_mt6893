@@ -16,6 +16,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/bitmap.h>
 #include <linux/console.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
@@ -106,8 +107,11 @@ struct mtk8250_reg {
 	unsigned int scr;
 	unsigned int dll;
 	unsigned int dlm;
+	unsigned int mtk_dll;
+	unsigned int mtk_dlm;
 	unsigned int lcr;
 	unsigned int efr;
+	unsigned int feature_sel;
 	unsigned int xon1;
 	unsigned int xon2;
 	unsigned int xoff1;
@@ -721,14 +725,32 @@ static int mtk8250_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM_SLEEP
+static void mtk8250_rollback_sleep_request(unsigned long *lines, bool sleep)
+{
+	unsigned long line;
+
+	for_each_set_bit(line, lines, CONFIG_SERIAL_8250_NR_UARTS) {
+		struct uart_8250_port *up = serial8250_get_port(line);
+		int sleep_req = serial_in(up, MTK_UART_SLEEP_REQ);
+
+		if (sleep)
+			sleep_req |= MTK_UART_SEND_SLEEP_REQ;
+		else
+			sleep_req &= ~MTK_UART_SEND_SLEEP_REQ;
+		serial_out(up, MTK_UART_SLEEP_REQ, sleep_req);
+	}
+}
+
 int mtk8250_request_to_sleep(void)
 {
-	int i = 0;
+	DECLARE_BITMAP(transitioned, CONFIG_SERIAL_8250_NR_UARTS);
+	int i;
 	int line = 0;
 	int sleep_req;
 	struct uart_8250_port *up;
 	struct mtk8250_data *data;
 
+	bitmap_zero(transitioned, CONFIG_SERIAL_8250_NR_UARTS);
 	for (line = 0; line < CONFIG_SERIAL_8250_NR_UARTS; line++) {
 		up = serial8250_get_port(line);
 
@@ -741,6 +763,7 @@ int mtk8250_request_to_sleep(void)
 		if (data->clk_count <= 0U)
 			continue;
 
+		i = 0;
 		/* request UART to sleep */
 		sleep_req = serial_in(up, MTK_UART_SLEEP_REQ);
 		serial_out(up, MTK_UART_SLEEP_REQ,
@@ -751,12 +774,14 @@ int mtk8250_request_to_sleep(void)
 			& MTK_UART_SLEEP_ACK_IDLE)) {
 			if (i++ >= MTK_UART_WAIT_ACK_TIMES) {
 				serial_out(up, MTK_UART_SLEEP_REQ, sleep_req);
+				mtk8250_rollback_sleep_request(transitioned, false);
 				pr_info_ratelimited("UART%d SLEEP ACK Fail\n",
 					line);
 				return -EBUSY;
 			}
 			udelay(10);
 		}
+		__set_bit(line, transitioned);
 	}
 
 	return 0;
@@ -765,12 +790,14 @@ EXPORT_SYMBOL(mtk8250_request_to_sleep);
 
 int mtk8250_request_to_wakeup(void)
 {
-	int i = 0;
+	DECLARE_BITMAP(transitioned, CONFIG_SERIAL_8250_NR_UARTS);
+	int i;
 	int line = 0;
 	int sleep_req;
 	struct uart_8250_port *up;
 	struct mtk8250_data *data;
 
+	bitmap_zero(transitioned, CONFIG_SERIAL_8250_NR_UARTS);
 	for (line = 0; line < CONFIG_SERIAL_8250_NR_UARTS; line++) {
 		up = serial8250_get_port(line);
 
@@ -783,6 +810,7 @@ int mtk8250_request_to_wakeup(void)
 		if (data->clk_count <= 0U)
 			continue;
 
+		i = 0;
 		/* wakeup uart */
 		sleep_req = serial_in(up, MTK_UART_SLEEP_REQ);
 		serial_out(up, MTK_UART_SLEEP_REQ,
@@ -793,11 +821,13 @@ int mtk8250_request_to_wakeup(void)
 			& MTK_UART_SLEEP_ACK_IDLE) {
 			if (i++ >= MTK_UART_WAIT_ACK_TIMES) {
 				serial_out(up, MTK_UART_SLEEP_REQ, sleep_req);
+				mtk8250_rollback_sleep_request(transitioned, true);
 				pr_debug("CANNOT GET UART%d WAKE ACK\n", line);
 				return -EBUSY;
 			}
 			udelay(10);
 		}
+		__set_bit(line, transitioned);
 	}
 
 	return 0;
@@ -826,17 +856,19 @@ static void mtk8250_save_dev(struct device *dev)
 	reg->highspeed = serial_in(up, MTK_UART_HIGHS);
 	reg->fracdiv_l = serial_in(up, MTK_UART_FRACDIV_L);
 	reg->fracdiv_m = serial_in(up, MTK_UART_FRACDIV_M);
+	reg->lcr = serial_in(up, UART_LCR);
 	serial_out(up, UART_LCR, reg->lcr | UART_LCR_DLAB);
 	reg->dll = serial_in(up, UART_DLL);
 	reg->dlm = serial_in(up, UART_DLM);
 	serial_out(up, UART_LCR, reg->lcr);
 
+	reg->feature_sel = serial_in(up, MTK_UART_FEATURE_SEL);
 	serial_out(up, MTK_UART_FEATURE_SEL, 0x1);
-	serial_out(up, MTK_UART_EFR, reg->efr);
+	reg->efr = serial_in(up, MTK_UART_EFR);
 
-	reg->dll = serial_in(up, MTK_UART_DLL);
-	reg->dlm = serial_in(up, MTK_UART_DLH);
-	serial_out(up, MTK_UART_FEATURE_SEL, 0x0);
+	reg->mtk_dll = serial_in(up, MTK_UART_DLL);
+	reg->mtk_dlm = serial_in(up, MTK_UART_DLH);
+	serial_out(up, MTK_UART_FEATURE_SEL, reg->feature_sel);
 
 	reg->sample_count = serial_in(up, MTK_UART_SAMPLE_COUNT);
 	reg->sample_point = serial_in(up, MTK_UART_SAMPLE_POINT);
@@ -845,10 +877,12 @@ static void mtk8250_save_dev(struct device *dev)
 	/* save flow control */
 	reg->mcr = serial_in(up, UART_MCR);
 	reg->ier = serial_in(up, UART_IER);
+	serial_out(up, UART_LCR, UART_LCR_CONF_MODE_B);
 	reg->xon1 = serial_in(up, UART_XON1);
 	reg->xon2 = serial_in(up, UART_XON2);
 	reg->xoff1 = serial_in(up, UART_XOFF1);
 	reg->xoff2 = serial_in(up, UART_XOFF2);
+	serial_out(up, UART_LCR, reg->lcr);
 	reg->escape_dat = serial_in(up, MTK_UART_ESCAPE_DAT);
 	reg->sleep_en = serial_in(up, MTK_UART_SLEEP_EN);
 
@@ -867,65 +901,21 @@ static void mtk8250_save_dev(struct device *dev)
  */
 void mtk8250_backup_dev(void)
 {
-	unsigned long flags;
 	int line = 0;
 	struct uart_8250_port *up;
 	struct mtk8250_data *data;
-	struct mtk8250_reg *reg;
 
 	for (line = 0; line < CONFIG_SERIAL_8250_NR_UARTS; line++) {
 		up = serial8250_get_port(line);
 		if (up->port.dev == NULL)
-			return;
+			continue;
 		data = dev_get_drvdata(up->port.dev);
 		if (data == NULL)
-			return;
-		reg = &data->reg;
+			continue;
 		if (!uart_console(&up->port))
 			continue;
 
-		spin_lock_irqsave(&up->port.lock, flags);
-
-		reg->fcr_rd = serial_in(up, MTK_UART_FCR_RD);
-
-		/*save baudrate */
-		reg->highspeed = serial_in(up, MTK_UART_HIGHS);
-		reg->fracdiv_l = serial_in(up, MTK_UART_FRACDIV_L);
-		reg->fracdiv_m = serial_in(up, MTK_UART_FRACDIV_M);
-		serial_out(up, UART_LCR, reg->lcr | UART_LCR_DLAB);
-		reg->dll = serial_in(up, UART_DLL);
-		reg->dlm = serial_in(up, UART_DLM);
-		serial_out(up, UART_LCR, reg->lcr);
-
-		serial_out(up, MTK_UART_FEATURE_SEL, 0x1);
-		serial_out(up, MTK_UART_EFR, reg->efr);
-
-		reg->dll = serial_in(up, MTK_UART_DLL);
-		reg->dlm = serial_in(up, MTK_UART_DLH);
-		serial_out(up, MTK_UART_FEATURE_SEL, 0x0);
-
-		reg->sample_count = serial_in(up, MTK_UART_SAMPLE_COUNT);
-		reg->sample_point = serial_in(up, MTK_UART_SAMPLE_POINT);
-		reg->guard = serial_in(up, MTK_UART_GUARD);
-
-		/* save flow control */
-		reg->mcr = serial_in(up, UART_MCR);
-		reg->ier = serial_in(up, UART_IER);
-		reg->xon1 = serial_in(up, UART_XON1);
-		reg->xon2 = serial_in(up, UART_XON2);
-		reg->xoff1 = serial_in(up, UART_XOFF1);
-		reg->xoff2 = serial_in(up, UART_XOFF2);
-		reg->escape_dat = serial_in(up, MTK_UART_ESCAPE_DAT);
-		reg->sleep_en = serial_in(up, MTK_UART_SLEEP_EN);
-
-		/* save others */
-		reg->escape_en = serial_in(up, MTK_UART_ESCAPE_EN);
-		reg->msr = serial_in(up, UART_MSR);
-		reg->scr = serial_in(up, UART_SCR);
-		reg->dma_en = serial_in(up, MTK_UART_DMA_EN);
-		reg->rxtri_ad = serial_in(up, MTK_UART_RXTRI_AD);
-		reg->rx_sel = serial_in(up, MTK_UART_RX_SEL);
-		spin_unlock_irqrestore(&up->port.lock, flags);
+		mtk8250_save_dev(up->port.dev);
 	}
 }
 EXPORT_SYMBOL(mtk8250_backup_dev);
@@ -968,9 +958,9 @@ void mtk8250_restore_dev(void)
 
 		serial_out(up, MTK_UART_EFR, reg->efr);
 
-		serial_out(up, MTK_UART_DLL, reg->dll);
-		serial_out(up, MTK_UART_DLH, reg->dlm);
-		serial_out(up, MTK_UART_FEATURE_SEL, 0x0);
+		serial_out(up, MTK_UART_DLL, reg->mtk_dll);
+		serial_out(up, MTK_UART_DLH, reg->mtk_dlm);
+		serial_out(up, MTK_UART_FEATURE_SEL, reg->feature_sel);
 
 		serial_out(up, MTK_UART_SAMPLE_COUNT, reg->sample_count);
 		serial_out(up, MTK_UART_SAMPLE_POINT, reg->sample_point);
@@ -979,10 +969,12 @@ void mtk8250_restore_dev(void)
 		/* restore flow control */
 		serial_out(up, UART_MCR, reg->mcr);
 		serial_out(up, UART_IER, reg->ier);
+		serial_out(up, UART_LCR, UART_LCR_CONF_MODE_B);
 		serial_out(up, UART_XON1, reg->xon1);
 		serial_out(up, UART_XON2, reg->xon2);
 		serial_out(up, UART_XOFF1, reg->xoff1);
 		serial_out(up, UART_XOFF2, reg->xoff2);
+		serial_out(up, UART_LCR, reg->lcr);
 		serial_out(up, MTK_UART_ESCAPE_DAT, reg->escape_dat);
 		serial_out(up, MTK_UART_SLEEP_EN, reg->sleep_en);
 
@@ -1011,7 +1003,7 @@ static int __maybe_unused mtk8250_suspend(struct device *dev)
 	up = serial8250_get_port(data->line);
 	if (up->port.dev == NULL)
 		return 0;
-	if (uart_console(&up->port) == 1)
+	if (uart_console(&up->port) && console_suspend_enabled)
 		mtk8250_save_dev(dev);
 	serial8250_suspend_port(data->line);
 
