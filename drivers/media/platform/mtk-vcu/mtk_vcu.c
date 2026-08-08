@@ -133,10 +133,14 @@ inline unsigned int ipi_id_to_inst_id(int id)
 		return VCU_VENC;
 }
 
+#ifdef DEBUG
 #define vcu_dbg_log(fmt, arg...) do { \
 		if (vcu_ptr->enable_vcu_dbg_log) \
 			pr_info(fmt, ##arg); \
 	} while (0)
+#else
+#define vcu_dbg_log(fmt, arg...)
+#endif
 
 #define MAP_PA_BASE_1GB  0x40000000 /* < 1GB registers */
 #define VCU_MAP_HW_REG_NUM 4

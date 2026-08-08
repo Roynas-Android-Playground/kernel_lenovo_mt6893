@@ -57,7 +57,7 @@ do {								\
 
 #define chr_info(fmt, args...)					\
 do {								\
-	if (chr_get_debug_level() >= CHRLOG_ERROR_LEVEL) {	\
+	if (chr_get_debug_level() >= CHRLOG_DEBUG_LEVEL) {	\
 		pr_notice_ratelimited(fmt, ##args);		\
 	}							\
 } while (0)
