@@ -158,8 +158,13 @@ static int configure_kgdboc(void)
 
 	kgdboc_use_kms = 0;
 	if (strncmp(cptr, "kms,", 4) == 0) {
+#ifdef CONFIG_VT
 		cptr += 4;
 		kgdboc_use_kms = 1;
+#else
+		pr_warn("kgdboc: kms requested without CONFIG_VT\n");
+		return -EINVAL;
+#endif
 	}
 
 	if (kgdboc_register_kbd(&cptr))
@@ -267,14 +272,18 @@ static int param_set_kgdboc_var(const char *kmessage,
 	return configure_kgdboc();
 }
 
+#ifdef CONFIG_VT
 static int dbg_restore_graphics;
+#endif
 
 static void kgdboc_pre_exp_handler(void)
 {
+#ifdef CONFIG_VT
 	if (!dbg_restore_graphics && kgdboc_use_kms) {
 		dbg_restore_graphics = 1;
 		con_debug_enter(vc_cons[fg_console].d);
 	}
+#endif
 	/* Increment the module count when the debugger is active */
 	if (!kgdb_connected)
 		try_module_get(THIS_MODULE);
@@ -285,10 +294,12 @@ static void kgdboc_post_exp_handler(void)
 	/* decrement the module count when the debugger detaches */
 	if (!kgdb_connected)
 		module_put(THIS_MODULE);
+#ifdef CONFIG_VT
 	if (kgdboc_use_kms && dbg_restore_graphics) {
 		dbg_restore_graphics = 0;
 		con_debug_leave();
 	}
+#endif
 	kgdboc_restore_input();
 }
 
