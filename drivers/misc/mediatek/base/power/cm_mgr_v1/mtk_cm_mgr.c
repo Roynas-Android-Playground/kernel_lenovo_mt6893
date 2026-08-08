@@ -702,7 +702,7 @@ int cm_mgr_to_sspm_command(u32 cmd, int val)
 	struct cm_mgr_data cm_mgr_d;
 
 	if (cm_sspm_ready != 1) {
-		pr_info("#@# %s(%d) sspm not ready(%d) to receive cmd(%d)\n",
+		pr_debug("#@# %s(%d) sspm not ready(%d) to receive cmd(%d)\n",
 			__func__, __LINE__, cm_sspm_ready, cmd);
 		ret = -1;
 		return ret;
@@ -772,16 +772,16 @@ int cm_mgr_to_sspm_command(u32 cmd, int val)
 		ret = mtk_ipi_send_compl(&sspm_ipidev, IPIS_C_CM,
 		IPI_SEND_POLLING, &cm_mgr_d, CM_MGR_D_LEN, 2000);
 		if (ret != 0) {
-			pr_info("#@# %s(%d) cmd(%d) error, return %d\n",
+			pr_debug("#@# %s(%d) cmd(%d) error, return %d\n",
 					__func__, __LINE__, cmd, ret);
 		} else if (!cm_ipi_ackdata) {
 			ret = cm_ipi_ackdata;
-			pr_info("#@# %s(%d) cmd(%d) ack fail %d\n",
+			pr_debug("#@# %s(%d) cmd(%d) ack fail %d\n",
 					__func__, __LINE__, cmd, ret);
 		}
 	break;
 	default:
-		pr_info("#@# %s(%d) wrong cmd(%d)!!!\n",
+		pr_debug("#@# %s(%d) wrong cmd(%d)!!!\n",
 			__func__, __LINE__, cmd);
 	break;
 	}
@@ -857,16 +857,16 @@ int cm_mgr_to_sspm_command(u32 cmd, int val)
 		ret = sspm_ipi_send_sync(IPI_ID_CM, IPI_OPT_POLLING,
 				&cm_mgr_d, CM_MGR_D_LEN, &ack_data, 1);
 		if (ret != 0) {
-			pr_info("#@# %s(%d) cmd(%d) error, return %d\n",
+			pr_debug("#@# %s(%d) cmd(%d) error, return %d\n",
 					__func__, __LINE__, cmd, ret);
 		} else if (ack_data < 0) {
 			ret = ack_data;
-			pr_info("#@# %s(%d) cmd(%d) return %d\n",
+			pr_debug("#@# %s(%d) cmd(%d) return %d\n",
 					__func__, __LINE__, cmd, ret);
 		}
 		break;
 	default:
-		pr_info("#@# %s(%d) wrong cmd(%d)!!!\n",
+		pr_debug("#@# %s(%d) wrong cmd(%d)!!!\n",
 				__func__, __LINE__, cmd);
 		break;
 	}
