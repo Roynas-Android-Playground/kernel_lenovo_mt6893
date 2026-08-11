@@ -41,7 +41,7 @@ static bool ppm_request_pending(void)
 	struct cpumask requested;
 
 	mutex_lock(&ppm_mutex);
-	cpumask_and(&requested, &ppm_online_cpus, cpu_present_mask);
+	cpumask_and(&requested, &ppm_online_cpus, &ppm_allowed_cpus);
 	mutex_unlock(&ppm_mutex);
 
 	return !cpumask_equal(&requested, cpu_online_mask);
@@ -65,7 +65,7 @@ static int ppm_thread_fn(void *data)
 
 		mutex_lock(&ppm_mutex);
 		cpumask_and(&ppm_cpus_req, &ppm_online_cpus,
-			    cpu_present_mask);
+			    &ppm_allowed_cpus);
 		mutex_unlock(&ppm_mutex);
 
 #ifdef CONFIG_PM_SLEEP
@@ -159,13 +159,21 @@ Retry_OFF:
 
 static void ppm_init_allowed_cpus(void)
 {
+	unsigned int cpu;
+
 	if (setup_max_cpus < num_present_cpus())
 		cpumask_copy(&ppm_allowed_cpus, cpu_online_mask);
 	else
 		cpumask_copy(&ppm_allowed_cpus, cpu_present_mask);
+
+	for_each_possible_cpu(cpu) {
+		if (cpu_is_quarantined(cpu))
+			cpumask_clear_cpu(cpu, &ppm_allowed_cpus);
+	}
+
 	cpumask_set_cpu(get_boot_cpu_id(), &ppm_allowed_cpus);
 
-	pr_info("maxcpus=%u limits PPM CPUs to %*pbl\n",
+	pr_info("maxcpus=%u and quarantine limit PPM CPUs to %*pbl\n",
 		setup_max_cpus, cpumask_pr_args(&ppm_allowed_cpus));
 }
 
