@@ -104,14 +104,19 @@ void dump_partition_config_per_cpu(void *info)
 
 static int l3cc_info_show(struct seq_file *m, void *unused)
 {
-	struct partition_stats stats;
+	struct partition_stats stats = { };
 	int partcr_val;
 	int i;
+	int ret;
 
 	seq_puts(m, "dump L3 partition register.\n");
 	for (i = 0; i < nr_cpu_ids; i++) {
-		smp_call_function_single(i,
-				dump_partition_config_per_cpu, &stats, 1);
+		ret = smp_call_function_single(i,
+					       dump_partition_config_per_cpu, &stats, 1);
+		if (ret) {
+			seq_printf(m, "\tCPU%d: unavailable (%d)\n", i, ret);
+			continue;
+		}
 
 		seq_printf(m, "\tCPU%d: group[%d]\n", i, stats.state[i]);
 	}

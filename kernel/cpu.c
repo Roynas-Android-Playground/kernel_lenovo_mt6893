@@ -101,6 +101,13 @@ static int __init setup_cpu_quarantine(char *str)
 }
 early_param("cpu_quarantine", setup_cpu_quarantine);
 
+bool cpu_is_quarantined(unsigned int cpu)
+{
+	return cpu < nr_cpu_ids &&
+		cpumask_test_cpu(cpu, &cpu_quarantine_mask);
+}
+EXPORT_SYMBOL_GPL(cpu_is_quarantined);
+
 #if defined(CONFIG_LOCKDEP) && defined(CONFIG_SMP)
 static struct lockdep_map cpuhp_state_up_map =
 	STATIC_LOCKDEP_MAP_INIT("cpuhp_state-up", &cpuhp_state_up_map);
@@ -1117,7 +1124,7 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen, enum cpuhp_state target)
 	struct task_struct *idle;
 	int ret = 0;
 
-	if (cpumask_test_cpu(cpu, &cpu_quarantine_mask)) {
+	if (cpu_is_quarantined(cpu)) {
 		pr_warn_ratelimited("CPU%u is quarantined; refusing CPU-up\n", cpu);
 		return -EPERM;
 	}

@@ -120,8 +120,12 @@ static unsigned int apply_limits(const struct cluster_data *cluster,
 
 static unsigned int get_active_cpu_count(const struct cluster_data *cluster)
 {
-	return cluster->num_cpus -
-		sched_isolate_count(&cluster->cpu_mask, true);
+	cpumask_t active_cpus;
+
+	cpumask_and(&active_cpus, &cluster->cpu_mask, cpu_online_mask);
+	cpumask_andnot(&active_cpus, &active_cpus, cpu_isolated_mask);
+
+	return cpumask_weight(&active_cpus);
 }
 
 static bool is_active(const struct cpu_data *state)
